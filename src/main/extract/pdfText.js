@@ -9,13 +9,14 @@ async function lib() {
 }
 
 /**
- * @returns {Promise<{text: string, numPages: number}>}
+ * Per-page text. Accepts a file path or a Buffer.
+ * @returns {Promise<string[]>}
  */
-export async function extractPdfText(filePath) {
+export async function extractPdfPages(input) {
   const { getDocument } = await lib();
-  const data = new Uint8Array(fs.readFileSync(filePath));
+  const data = new Uint8Array(Buffer.isBuffer(input) ? input : fs.readFileSync(input));
   const doc = await getDocument({ data, useSystemFonts: true, disableFontFace: true }).promise;
-  let text = '';
+  const pages = [];
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
@@ -24,6 +25,7 @@ export async function extractPdfText(filePath) {
       .filter((it) => it.str && it.str.trim() !== '')
       .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5] }));
     items.sort((a, b) => (Math.abs(b.y - a.y) > 2 ? b.y - a.y : a.x - b.x));
+    let text = '';
     let lastY = null;
     for (const it of items) {
       if (lastY !== null && Math.abs(it.y - lastY) > 2) text += '\n';
@@ -31,10 +33,18 @@ export async function extractPdfText(filePath) {
       text += it.str;
       lastY = it.y;
     }
-    text += '\n\n';
+    pages.push(text);
   }
   await doc.destroy();
-  return { text: text.trim(), numPages: doc.numPages };
+  return pages;
+}
+
+/**
+ * @returns {Promise<{text: string, numPages: number}>}
+ */
+export async function extractPdfText(filePath) {
+  const pages = await extractPdfPages(filePath);
+  return { text: pages.join('\n\n').trim(), numPages: pages.length };
 }
 
 /** Heuristic: does this PDF have a usable text layer (vs a scanned image)? */

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getSettings, saveSettings } from './settings.js';
 import * as store from './store.js';
+import { ingestFile } from './intake.js';
 import { checkEmail } from './email.js';
 import { runExtraction } from './extract/index.js';
 import { pushToQuickBooks, startConnect, finishConnectManual, qbStatus } from './quickbooks.js';
@@ -83,18 +84,19 @@ handle('settings:set', (patch) => {
 
 handle('docs:list', () => store.listDocuments());
 handle('docs:get', (id) => store.getDocument(id));
-handle('docs:add-files', (paths) => {
-  const added = [];
+handle('docs:add-files', async (paths) => {
+  let added = 0;
   const errors = [];
   for (const p of paths) {
     try {
-      added.push(store.addDocument({ sourcePath: p, fileName: path.basename(p), source: 'drop' }));
+      const docs = await ingestFile({ sourcePath: p, fileName: path.basename(p), source: 'drop' });
+      added += docs.length;
     } catch (err) {
       errors.push(`${path.basename(p)}: ${err.message}`);
     }
   }
   notifyDocsChanged();
-  return { added: added.length, errors };
+  return { added, errors };
 });
 handle('docs:pick-files', async () => {
   const res = await dialog.showOpenDialog(win, {
@@ -105,8 +107,8 @@ handle('docs:pick-files', async () => {
   const out = { added: 0, errors: [] };
   for (const p of res.filePaths) {
     try {
-      store.addDocument({ sourcePath: p, fileName: path.basename(p), source: 'drop' });
-      out.added++;
+      const docs = await ingestFile({ sourcePath: p, fileName: path.basename(p), source: 'drop' });
+      out.added += docs.length;
     } catch (err) {
       out.errors.push(`${path.basename(p)}: ${err.message}`);
     }

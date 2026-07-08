@@ -2,7 +2,8 @@
 // authorized senders into the local document queue, marks messages seen.
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import { addDocument, mimeFor } from './store.js';
+import { mimeFor } from './store.js';
+import { ingestFile } from './intake.js';
 
 /**
  * Check the inbox once. Returns { added, checked }.
@@ -49,7 +50,7 @@ export async function checkEmail(settings) {
         for (const att of parsed.attachments || []) {
           const name = att.filename || `attachment-${uid}`;
           if (!mimeFor(name)) continue;
-          addDocument({
+          const docs = await ingestFile({
             buffer: att.content,
             fileName: name,
             source: 'email',
@@ -59,7 +60,7 @@ export async function checkEmail(settings) {
               receivedAt: (parsed.date || new Date()).toISOString(),
             },
           });
-          added++;
+          added += docs.length;
           tookAttachment = true;
         }
         if (tookAttachment) {

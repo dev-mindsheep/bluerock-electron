@@ -19,6 +19,7 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "imapflow": "^1.0.191",
     "mailparser": "^3.7.4",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38"
   },
   "devDependencies": {
