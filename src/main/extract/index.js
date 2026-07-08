@@ -38,11 +38,9 @@ export async function runExtraction(doc, settings) {
       const aiRes = await aiExtract({ ai, text });
       return finishAi(aiRes, 'ai-text');
     }
-    // Scanned PDF with no text layer — no direct image path for a PDF page yet;
-    // clearest failure mode for the POC is to say so.
-    throw new Error(
-      'This PDF has no text layer (scanned image). Export it as an image (JPG/PNG) and drop it in, or re-export the PDF from the KAR system.'
-    );
+    // Scanned PDF with no text layer — Claude reads PDF pages as images natively.
+    const aiRes = await aiExtract({ ai, pdfPath: doc.filePath });
+    return finishAi(aiRes, 'ai-pdf-vision');
   }
 
   // Image input -> AI vision

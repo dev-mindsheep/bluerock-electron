@@ -80,19 +80,33 @@ function fileToBase64(filePath) {
  * @param {object} opts.ai        settings.ai section
  * @param {string} [opts.text]    extracted PDF text (text mode)
  * @param {string} [opts.imagePath] image file (vision mode)
+ * @param {string} [opts.pdfPath]  scanned PDF with no text layer (Claude reads pages as images)
  * @param {string} [opts.mime]
  */
-export async function aiExtract({ ai, text, imagePath, mime }) {
-  if (ai.provider === 'openai') return openaiExtract({ ai, text, imagePath, mime });
-  return anthropicExtract({ ai, text, imagePath, mime });
+export async function aiExtract({ ai, text, imagePath, pdfPath, mime }) {
+  if (ai.provider === 'openai') {
+    if (pdfPath) {
+      throw new Error(
+        'Scanned PDFs (no text layer) require the Anthropic provider, which reads PDF pages as images. Switch provider in Settings > AI, or convert the scan to JPG/PNG.'
+      );
+    }
+    return openaiExtract({ ai, text, imagePath, mime });
+  }
+  return anthropicExtract({ ai, text, imagePath, pdfPath, mime });
 }
 
-async function anthropicExtract({ ai, text, imagePath, mime }) {
+async function anthropicExtract({ ai, text, imagePath, pdfPath, mime }) {
   if (!ai.anthropicKey) throw new Error('Anthropic API key not configured (Settings > AI)');
   const client = new Anthropic({ apiKey: ai.anthropicKey });
 
   const content = [];
-  if (imagePath) {
+  if (pdfPath) {
+    content.push({
+      type: 'document',
+      source: { type: 'base64', media_type: 'application/pdf', data: fileToBase64(pdfPath) },
+    });
+    content.push({ type: 'text', text: 'Extract the procurement document data from this scanned PDF.' });
+  } else if (imagePath) {
     content.push({
       type: 'image',
       source: { type: 'base64', media_type: mime, data: fileToBase64(imagePath) },
