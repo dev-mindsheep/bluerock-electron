@@ -96,8 +96,9 @@ export async function aiExtract({ ai, text, imagePath, pdfPath, mime }) {
 }
 
 async function anthropicExtract({ ai, text, imagePath, pdfPath, mime }) {
-  if (!ai.anthropicKey) throw new Error('Anthropic API key not configured (Settings > AI)');
-  const client = new Anthropic({ apiKey: ai.anthropicKey });
+  const key = (ai.anthropicKey || '').trim();
+  if (!key) throw new Error('Anthropic API key not configured (Settings > AI)');
+  const client = new Anthropic({ apiKey: key });
 
   const content = [];
   if (pdfPath) {
@@ -137,7 +138,8 @@ async function anthropicExtract({ ai, text, imagePath, pdfPath, mime }) {
 }
 
 async function openaiExtract({ ai, text, imagePath, mime }) {
-  if (!ai.openaiKey) throw new Error('OpenAI API key not configured (Settings > AI)');
+  const key = (ai.openaiKey || '').trim();
+  if (!key) throw new Error('OpenAI API key not configured (Settings > AI)');
 
   const userContent = [];
   if (imagePath) {
@@ -154,7 +156,7 @@ async function openaiExtract({ ai, text, imagePath, mime }) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${ai.openaiKey}`,
+      Authorization: `Bearer ${key}`,
     },
     body: JSON.stringify({
       model: ai.openaiModel || 'gpt-4o',
