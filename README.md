@@ -16,10 +16,10 @@ explicitly enabled.
    QuickBooks credentials (or leave in Mock mode), optional Google Drive.
 2. **Queue tab** — documents arrive by email polling or drag-and-drop
    (PDF / JPG / PNG / WEBP).
-3. Click a document → it is **extracted**:
-   - Typed PDFs: local pdf.js text extraction + rule-based parser — **no AI, no cost**.
-   - Photos/scans (and low-confidence PDFs): AI vision extraction with a strict
-     JSON schema (Claude `claude-opus-4-8` by default, or GPT).
+3. Click a document → it is **extracted with AI** (default): typed PDFs as text,
+   photos/scans as vision — always through a strict JSON schema
+   (Claude `claude-opus-4-8` by default, or GPT). A local no-AI parser for typed
+   PDFs exists as a cost saver ("Use AI for typed PDFs" → Auto/Never in Settings).
 4. **Review screen** — original document on the left, editable fields on the right.
    Low-confidence fields are highlighted. Fix anything, then:
 5. **Approve & push** — a QuickBooks Bill is created (0.00 amounts, review-pending;

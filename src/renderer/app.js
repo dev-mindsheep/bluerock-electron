@@ -345,7 +345,7 @@ async function renderSettings() {
 
       <div class="settings-card">
         <h2>AI extraction</h2>
-        <div class="hint">Typed PDFs are parsed locally with no AI. The AI key is used for photos/scans (vision) and as a fallback when the local parser is unsure. Keys are stored encrypted in the OS keychain-backed store.</div>
+        <div class="hint">All documents are extracted with AI by default (typed PDFs as text, photos/scans as vision). The local no-AI parser is available as a cost saver via the option below. Keys are stored encrypted in the OS keychain-backed store.</div>
         <div class="grid2">
           <div class="field"><label>Provider</label>
             <select data-s="ai.provider">
@@ -355,8 +355,8 @@ async function renderSettings() {
           </div>
           <div class="field"><label>Use AI for typed PDFs</label>
             <select data-s="ai.useAiForTypedPdfs">
+              <option value="always" ${s.ai.useAiForTypedPdfs === 'always' ? 'selected' : ''}>Always (recommended)</option>
               <option value="auto" ${s.ai.useAiForTypedPdfs === 'auto' ? 'selected' : ''}>Auto (parser first, AI fallback)</option>
-              <option value="always" ${s.ai.useAiForTypedPdfs === 'always' ? 'selected' : ''}>Always</option>
               <option value="never" ${s.ai.useAiForTypedPdfs === 'never' ? 'selected' : ''}>Never (local only)</option>
             </select>
           </div>

@@ -33,7 +33,7 @@ export const DEFAULTS = {
     anthropicModel: 'claude-opus-4-8',
     openaiKey: '',
     openaiModel: 'gpt-4o',
-    useAiForTypedPdfs: 'auto', // 'auto' (parser first, AI fallback) | 'always' | 'never'
+    useAiForTypedPdfs: 'always', // 'always' (default: AI-first) | 'auto' (parser first, AI fallback) | 'never'
   },
   qb: {
     mode: 'mock', // 'mock' | 'sandbox' | 'production'
