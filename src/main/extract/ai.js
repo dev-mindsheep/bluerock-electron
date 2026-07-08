@@ -14,16 +14,16 @@ export const EXTRACTION_SCHEMA = {
   ],
   properties: {
     doc_type: { type: 'string', enum: ['purchase_request', 'service_request'] },
-    number: { type: ['string', 'null'], description: 'PR/SR number, digits only' },
-    date: { type: ['string', 'null'], description: 'Document date as DD/MM/YYYY' },
-    requester_name: { type: ['string', 'null'] },
-    requester_phone: { type: ['string', 'null'] },
-    department: { type: ['string', 'null'] },
-    project: { type: ['string', 'null'], description: 'Full project line, e.g. "Purchase Request - KAR 2"' },
-    project_site: { type: ['string', 'null'], description: 'Exactly "KAR 1", "KAR 2" or "KAR 3"; null if not determinable' },
-    priority: { type: ['string', 'null'] },
-    purchase_type: { type: ['string', 'null'] },
-    note: { type: ['string', 'null'] },
+    number: { type: 'string', description: 'PR/SR number, digits only; "" if unreadable' },
+    date: { type: 'string', description: 'Document date as DD/MM/YYYY; "" if unreadable' },
+    requester_name: { type: 'string' },
+    requester_phone: { type: 'string' },
+    department: { type: 'string' },
+    project: { type: 'string', description: 'Full project line, e.g. "Purchase Request - KAR 2"' },
+    project_site: { type: 'string', description: 'Exactly "KAR 1", "KAR 2" or "KAR 3"; "" if not determinable' },
+    priority: { type: 'string' },
+    purchase_type: { type: 'string' },
+    note: { type: 'string' },
     line_items: {
       type: 'array',
       items: {
@@ -31,12 +31,12 @@ export const EXTRACTION_SCHEMA = {
         additionalProperties: false,
         required: ['no', 'description', 'qty', 'uom', 'sage_code', 'purpose'],
         properties: {
-          no: { type: ['integer', 'null'] },
-          description: { type: ['string', 'null'] },
-          qty: { type: ['number', 'null'] },
-          uom: { type: ['string', 'null'] },
-          sage_code: { type: ['string', 'null'], description: 'e.g. OFSU-00126' },
-          purpose: { type: ['string', 'null'] },
+          no: { type: 'integer', description: 'Row number (1-based)' },
+          description: { type: 'string' },
+          qty: { type: ['number', 'null'], description: 'null if unreadable' },
+          uom: { type: 'string' },
+          sage_code: { type: 'string', description: 'e.g. OFSU-00126; "" if absent (Service Requests have no Sage column)' },
+          purpose: { type: 'string' },
         },
       },
     },
@@ -47,9 +47,9 @@ export const EXTRACTION_SCHEMA = {
         additionalProperties: false,
         required: ['name', 'status', 'timestamp'],
         properties: {
-          name: { type: ['string', 'null'] },
-          status: { type: ['string', 'null'] },
-          timestamp: { type: ['string', 'null'], description: 'DD/MM/YYYY HH:MM:SS' },
+          name: { type: 'string' },
+          status: { type: 'string' },
+          timestamp: { type: 'string', description: 'DD/MM/YYYY HH:MM:SS; "" if unreadable' },
         },
       },
     },
@@ -64,8 +64,8 @@ export const EXTRACTION_SCHEMA = {
 const PROMPT = `You are extracting structured data from a KAR Oil Refinery procurement document
 (a Purchase Request or Service Request from the internal e-service system at app.karbusiness.com).
 The input may be clean text, a phone photo of a printed page, or a photo of a computer screen
-(expect glare, skew, moire). Extract every field faithfully; use null when a value is absent or
-unreadable, and list any field you are unsure about in low_confidence_fields.
+(expect glare, skew, moire). Extract every field faithfully; use an empty string "" when a text value is absent or
+unreadable (null for unreadable quantities), and list any field you are unsure about in low_confidence_fields.
 Sage codes have the form PREFIX-NNNNN with prefixes OFSU, CIVL, TOEQ, ITDE, TOOL, IT, FURN.
 Notes may contain Kurdish/Arabic text — transcribe as-is.
 Line items appear in a table: row number, material/service description, QTY, UoM, Sage Code, Purpose Of Use.
@@ -73,6 +73,17 @@ The approval chain lists approver names with "Approved" and a DD/MM/YYYY HH:MM:S
 
 function fileToBase64(filePath) {
   return fs.readFileSync(filePath).toString('base64');
+}
+
+// The schema uses "" for absent values (Anthropic caps union-typed fields at 16);
+// normalize back to null so the rest of the app sees one convention.
+function emptyToNull(v) {
+  if (v === '') return null;
+  if (Array.isArray(v)) return v.map(emptyToNull);
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, emptyToNull(x)]));
+  }
+  return v;
 }
 
 /**
@@ -134,7 +145,7 @@ async function anthropicExtract({ ai, text, imagePath, pdfPath, mime }) {
   }
   const textBlock = response.content.find((b) => b.type === 'text');
   if (!textBlock) throw new Error('No extraction output returned');
-  return { data: JSON.parse(textBlock.text), provider: 'anthropic', model: response.model };
+  return { data: emptyToNull(JSON.parse(textBlock.text)), provider: 'anthropic', model: response.model };
 }
 
 async function openaiExtract({ ai, text, imagePath, mime }) {
@@ -177,5 +188,5 @@ async function openaiExtract({ ai, text, imagePath, mime }) {
   const json = await res.json();
   const msg = json.choices?.[0]?.message;
   if (msg?.refusal) throw new Error(`OpenAI refused: ${msg.refusal}`);
-  return { data: JSON.parse(msg.content), provider: 'openai', model: json.model };
+  return { data: emptyToNull(JSON.parse(msg.content)), provider: 'openai', model: json.model };
 }
