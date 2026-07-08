@@ -20,7 +20,7 @@ export const EXTRACTION_SCHEMA = {
     requester_phone: { type: ['string', 'null'] },
     department: { type: ['string', 'null'] },
     project: { type: ['string', 'null'], description: 'Full project line, e.g. "Purchase Request - KAR 2"' },
-    project_site: { type: ['string', 'null'], enum: ['KAR 1', 'KAR 2', 'KAR 3', null] },
+    project_site: { type: ['string', 'null'], description: 'Exactly "KAR 1", "KAR 2" or "KAR 3"; null if not determinable' },
     priority: { type: ['string', 'null'] },
     purchase_type: { type: ['string', 'null'] },
     note: { type: ['string', 'null'] },
