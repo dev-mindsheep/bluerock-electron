@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file:; frame-src file:;" />
+  <title>Blue Rock Procurement</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">BR</div>
+        <div>
+          <div class="brand-name">Blue Rock</div>
+          <div class="brand-sub">Procurement</div>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-btn active" data-view="queue">📥 Queue</button>
+        <button class="nav-btn" data-view="settings">⚙️ Settings</button>
+      </nav>
+      <div id="statusbar"></div>
+    </aside>
+    <main id="main"></main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

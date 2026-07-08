@@ -1,0 +1,25 @@
+appId: com.mindsheep.bluerock-procurement
+productName: Blue Rock Procurement
+directories:
+  output: dist
+files:
+  - src/**/*
+  - package.json
+  - node_modules/**/*
+asar: true
+mac:
+  category: public.app-category.business
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Unsigned build — client opens via right-click > Open to bypass Gatekeeper (per SOW)
+  identity: null
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true
+  perMachine: false

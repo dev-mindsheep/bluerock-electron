@@ -1,0 +1,28 @@
+{
+  "name": "bluerock-procurement",
+  "productName": "Blue Rock Procurement",
+  "version": "0.1.0",
+  "description": "Blue Rock Trading — KAR procurement document intake, extraction, review and QuickBooks entry",
+  "author": "Mindsheep Marketing <david@mindsheep.com.au>",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "test:extract": "node scripts/test-extract.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "imapflow": "^1.0.191",
+    "mailparser": "^3.7.4",
+    "pdfjs-dist": "^4.10.38"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  }
+}
