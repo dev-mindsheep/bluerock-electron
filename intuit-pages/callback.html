@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickBooks Connection — Blue Rock Procurement</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; color: #222;
+         max-width: 720px; margin: 0 auto; padding: 48px 24px; line-height: 1.6; }
+  h1 { color: #1a2b45; font-size: 1.5em; }
+  .ok { color: #1e7e34; }
+  .err { color: #b00020; }
+  .field { margin: 18px 0; }
+  .label { font-weight: 600; margin-bottom: 4px; }
+  code.value { display: block; background: #f4f6f8; border: 1px solid #d9dee3;
+        border-radius: 6px; padding: 10px 12px; font-size: 0.95em;
+        word-break: break-all; user-select: all; }
+  button { margin-top: 6px; padding: 6px 14px; font-size: 0.9em; cursor: pointer;
+           border: 1px solid #2e5e9e; background: #2e5e9e; color: #fff; border-radius: 6px; }
+  button.copied { background: #1e7e34; border-color: #1e7e34; }
+  ol { padding-left: 20px; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #ddd;
+           font-size: 0.85em; color: #888; }
+</style>
+</head>
+<body>
+<h1>Blue Rock Procurement — QuickBooks connection</h1>
+<div id="content"><p>Reading connection details…</p></div>
+
+<footer>Mindsheep · this page runs entirely in your browser; nothing is sent anywhere.</footer>
+
+<script>
+(function () {
+  var q = new URLSearchParams(window.location.search);
+  var code = q.get('code'), realmId = q.get('realmId'), error = q.get('error');
+  var el = document.getElementById('content');
+
+  function field(label, value, id) {
+    return '<div class="field"><div class="label">' + label + '</div>' +
+      '<code class="value" id="' + id + '">' + value + '</code>' +
+      '<button onclick="copyVal(\'' + id + '\', this)">Copy</button></div>';
+  }
+
+  if (error) {
+    el.innerHTML = '<p class="err">QuickBooks reported an error: <strong>' + error +
+      '</strong></p><p>Close this page and try connecting again from the app ' +
+      '(Settings → QuickBooks → Connect).</p>';
+  } else if (code && realmId) {
+    el.innerHTML =
+      '<p class="ok"><strong>Sign-in successful.</strong> One step left — copy these two values into the app:</p>' +
+      field('Authorization code', code, 'v-code') +
+      field('Company ID (realmId)', realmId, 'v-realm') +
+      '<ol><li>Open Blue Rock Procurement.</li>' +
+      '<li>Go to <strong>Settings → QuickBooks → Manual code</strong>.</li>' +
+      '<li>Paste both values and click <strong>Finish connection</strong>.</li></ol>' +
+      '<p>The code expires after a few minutes, so do this now. If it expires, ' +
+      'just click Connect in the app and sign in again.</p>';
+  } else {
+    el.innerHTML = '<p>This page completes the QuickBooks connection for the ' +
+      'Blue Rock Procurement desktop app. It normally opens automatically at the ' +
+      'end of the QuickBooks sign-in flow — no connection details were found in ' +
+      'the address, so if you were connecting, start again from the app ' +
+      '(Settings → QuickBooks → Connect).</p>';
+  }
+
+  window.copyVal = function (id, btn) {
+    var text = document.getElementById(id).textContent;
+    function done() { btn.textContent = 'Copied ✓'; btn.classList.add('copied');
+      setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done);
+    } else {
+      var r = document.createRange(); r.selectNodeContents(document.getElementById(id));
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      document.execCommand('copy'); s.removeAllRanges(); done();
+    }
+  };
+})();
+</script>
+</body>
+</html>

@@ -3,11 +3,12 @@ import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getSettings, saveSettings } from './settings.js';
+import { logError, logFilePath } from './log.js';
 import * as store from './store.js';
 import { ingestFile } from './intake.js';
 import { checkEmail } from './email.js';
 import { runExtraction } from './extract/index.js';
-import { pushToQuickBooks, startConnect, finishConnectManual, qbStatus } from './quickbooks.js';
+import { pushToQuickBooks, startConnect, finishConnectManual, qbStatus, fetchVendors } from './quickbooks.js';
 import { startDriveConnect, archiveToDrive, driveStatus } from './drive.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,17 @@ function createWindow() {
     },
   });
   win.removeMenu?.();
+  // Links (mailto:, https:) open in the OS default handler, never in-window.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('file:')) {
+      e.preventDefault();
+      if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
+    }
+  });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 }
 
@@ -70,10 +82,13 @@ function handle(channel, fn) {
       return ok(await fn(...args));
     } catch (err) {
       console.error(`[${channel}]`, err);
+      logError(channel, err);
       return fail(err);
     }
   });
 }
+
+handle('logs:open', () => { shell.showItemInFolder(logFilePath()); return true; });
 
 handle('settings:get', () => getSettings());
 handle('settings:set', (patch) => {
@@ -118,6 +133,11 @@ handle('docs:pick-files', async () => {
 });
 handle('docs:update-extraction', (id, extraction) => {
   const doc = store.updateDocument(id, { extraction });
+  notifyDocsChanged();
+  return doc;
+});
+handle('docs:set-vendor', (id, vendor) => {
+  const doc = store.updateDocument(id, { vendorId: vendor?.vendorId || null, vendorName: vendor?.vendorName || null });
   notifyDocsChanged();
   return doc;
 });
@@ -184,6 +204,7 @@ handle('qb:push', async (id) => {
 handle('qb:connect', () => startConnect());
 handle('qb:connect-manual', (args) => finishConnectManual(args));
 handle('qb:status', () => qbStatus());
+handle('qb:vendors', () => fetchVendors());
 
 handle('drive:connect', () => startDriveConnect());
 handle('drive:status', () => driveStatus());

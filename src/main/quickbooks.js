@@ -10,63 +10,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getSettings, saveSettings } from './settings.js';
+import { apiBase, buildBillPayload, listVendors, resolveCompanyIds, uploadAttachment } from './qb-api.js';
 
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
 
-function apiBase(mode) {
-  return mode === 'production'
-    ? 'https://quickbooks.api.intuit.com'
-    : 'https://sandbox-quickbooks.api.intuit.com';
-}
-
-function toIsoDate(ddmmyyyy) {
-  const m = (ddmmyyyy || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return new Date().toISOString().slice(0, 10);
-  return `${m[3]}-${m[2]}-${m[1]}`;
-}
-
-/** Build the QBO Bill payload from a reviewed extraction. */
-export function buildBillPayload(extraction, qb) {
-  const lines = (extraction.line_items || []).map((li, i) => {
-    const prefix = (li.sage_code || '').split('-')[0];
-    const accountId = qb.accountMap?.[prefix] || qb.defaultAccountId || '';
-    return {
-      DetailType: 'AccountBasedExpenseLineDetail',
-      // Amounts unknown at intake — entries land at 0.00 in review-pending state;
-      // Alan's team adds cost + margin in QBO before approving the bill.
-      Amount: 0,
-      Description: [
-        li.description,
-        li.qty != null ? `Qty: ${li.qty} ${li.uom || ''}`.trim() : null,
-        li.sage_code,
-        li.purpose,
-      ].filter(Boolean).join(' | ').slice(0, 4000),
-      AccountBasedExpenseLineDetail: {
-        AccountRef: accountId ? { value: String(accountId) } : undefined,
-      },
-    };
-  });
-
-  return {
-    VendorRef: { value: String(qb.vendorId || ''), name: qb.vendorName || undefined },
-    TxnDate: toIsoDate(extraction.date),
-    DocNumber: extraction.number ? `${extraction.doc_type === 'service_request' ? 'SR' : 'PR'}-${extraction.number}` : undefined,
-    PrivateNote: [
-      `KAR ${extraction.doc_type === 'service_request' ? 'Service' : 'Purchase'} Request #${extraction.number || '?'}`,
-      extraction.department ? `Dept: ${extraction.department}` : null,
-      extraction.project_site ? `Site: ${extraction.project_site}` : null,
-      extraction.requester_name ? `Requester: ${extraction.requester_name}` : null,
-      extraction.note ? `Note: ${extraction.note}` : null,
-    ].filter(Boolean).join(' | ').slice(0, 4000),
-    Line: lines,
-  };
-}
+export { buildBillPayload } from './qb-api.js';
 
 /** Push a reviewed document to QuickBooks (or the mock outbox). */
 export async function pushToQuickBooks(doc, settings) {
   const qb = settings.qb;
   const payload = buildBillPayload(doc.extraction, qb);
+  // Reviewer-chosen vendor on this document overrides the placeholder default.
+  if (doc.vendorId) {
+    payload.VendorRef = { value: String(doc.vendorId), name: doc.vendorName || undefined };
+  }
 
   if (qb.mode === 'mock') {
     const dir = path.join(app.getPath('userData'), 'qb-outbox');
@@ -76,7 +34,7 @@ export async function pushToQuickBooks(doc, settings) {
     return { mock: true, billId: `MOCK-${(payload.DocNumber || doc.id)}`, docNumber: payload.DocNumber, payloadPath: file };
   }
 
-  if (!qb.vendorId) throw new Error('QuickBooks Vendor Id not set (Settings > QuickBooks)');
+  if (!doc.vendorId && !qb.vendorId) throw new Error('No vendor: pick one on the review screen, or connect to QuickBooks so the placeholder vendor resolves (Settings > QuickBooks)');
   const accessToken = await getAccessToken(qb);
   const realmId = qb.tokens?.realmId;
   if (!realmId) throw new Error('Not connected to QuickBooks — run Connect first');
@@ -93,9 +51,23 @@ export async function pushToQuickBooks(doc, settings) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = body?.Fault?.Error?.[0];
-    throw new Error(`QuickBooks error ${res.status}: ${detail?.Message || ''} ${detail?.Detail || ''}`.trim());
+    const tid = res.headers.get('intuit_tid');
+    throw new Error(`QuickBooks error ${res.status}: ${detail?.Message || ''} ${detail?.Detail || ''}${tid ? ` [intuit_tid ${tid}]` : ''}`.trim());
   }
-  return { mock: false, billId: body.Bill?.Id, docNumber: payload.DocNumber };
+  const billId = body.Bill?.Id;
+
+  // Attach the original source document to the bill. The bill exists at this
+  // point, so an attachment failure must not fail the push — surface it instead.
+  let attachment = null;
+  let attachmentError = null;
+  if (billId && doc.filePath && fs.existsSync(doc.filePath)) {
+    try {
+      attachment = await uploadAttachment(qb.mode, accessToken, realmId, billId, doc.filePath);
+    } catch (err) {
+      attachmentError = err.message;
+    }
+  }
+  return { mock: false, billId, docNumber: payload.DocNumber, attachment, attachmentError };
 }
 
 // ---------------- OAuth ----------------
@@ -116,7 +88,10 @@ async function getAccessToken(qb) {
     body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`QuickBooks token refresh failed (${res.status}) — reconnect in Settings`);
+  if (!res.ok) {
+    const tid = res.headers.get('intuit_tid');
+    throw new Error(`QuickBooks token refresh failed (${res.status}) — reconnect in Settings${tid ? ` [intuit_tid ${tid}]` : ''}`);
+  }
   const tokens = {
     ...t,
     access_token: json.access_token,
@@ -139,7 +114,14 @@ export async function startConnect() {
   if (!qb.clientId || !qb.clientSecret) throw new Error('QuickBooks Client ID / Secret not set');
   const state = crypto.randomBytes(12).toString('hex');
   const port = Number(qb.redirectPort) || 8123;
-  const redirectUri = `http://localhost:${port}/callback`;
+  // Intuit rejects localhost redirects on production apps — the auth URL must
+  // carry the registered HTTPS redirect there; sandbox uses the local loopback.
+  const redirectUri = qb.mode === 'production'
+    ? qb.productionRedirectUri
+    : `http://localhost:${port}/callback`;
+  if (qb.mode === 'production' && !redirectUri) {
+    throw new Error('Production redirect URI not set (Settings > QuickBooks)');
+  }
 
   const authUrl = `${AUTH_URL}?` + new URLSearchParams({
     client_id: qb.clientId,
@@ -150,9 +132,8 @@ export async function startConnect() {
   });
 
   if (qb.mode === 'production') {
-    // Loopback is rejected for production apps; open auth URL with localhost anyway
-    // is not allowed — so we just surface the URL and expect the manual paste flow
-    // against the registered HTTPS redirect page.
+    // The browser lands on the registered HTTPS callback page, which displays
+    // code + realmId for the user to paste back via finishConnectManual().
     await shell.openExternal(authUrl);
     return { manual: true, message: 'Production mode: complete sign-in in the browser, then paste the code and realmId from the callback page into Settings > QuickBooks > Manual code.' };
   }
@@ -185,7 +166,7 @@ export async function startConnect() {
 /** Production fallback: user pastes ?code=...&realmId=... from the HTTPS callback page. */
 export async function finishConnectManual({ code, realmId, redirectUri }) {
   const qb = getSettings().qb;
-  await exchangeCode(qb, code, redirectUri, realmId);
+  await exchangeCode(qb, code, redirectUri || qb.productionRedirectUri, realmId);
   return { connected: true, realmId };
 }
 
@@ -211,6 +192,26 @@ async function exchangeCode(qb, code, redirectUri, realmId) {
       },
     },
   });
+
+  // Fill empty accountMap / default-account / placeholder-vendor Ids by looking
+  // up their known names in the freshly connected company. Best-effort: on a
+  // sandbox company (US chart of accounts) most names won't exist, and manual
+  // values entered in Settings are never overwritten.
+  try {
+    const { qbPatch, unresolved } = await resolveCompanyIds(qb.mode, json.access_token, realmId, getSettings().qb);
+    saveSettings({ qb: qbPatch });
+    if (unresolved.length) console.warn('[qb] unresolved after connect:', unresolved.join('; '));
+  } catch (err) {
+    console.warn('[qb] post-connect Id resolution failed:', err.message);
+  }
+}
+
+/** Vendor list for the review screen's picker. Mock mode has no company to query. */
+export async function fetchVendors() {
+  const qb = getSettings().qb;
+  if (qb.mode === 'mock' || !qb.tokens?.refresh_token) return [];
+  const accessToken = await getAccessToken(qb);
+  return listVendors(qb.mode, accessToken, qb.tokens.realmId);
 }
 
 export function qbStatus() {

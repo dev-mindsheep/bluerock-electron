@@ -40,11 +40,25 @@ export const DEFAULTS = {
     clientId: '',
     clientSecret: '',
     redirectPort: 8123,
-    vendorId: '', // QBO Vendor.Id for KAR / supplier entity
-    vendorName: 'KAR Oil Refinery',
-    // Sage prefix -> QBO expense account (value = QBO Account Id)
+    // Production OAuth redirect — must be public HTTPS and registered in the
+    // Intuit app (localhost is sandbox-only per Intuit policy). This page shows
+    // the code + realmId for pasting back via Manual code entry.
+    productionRedirectUri: 'https://www.mindsheeplabs.com/legal/bluerock-callback.html',
+    // Bills are payables to the market supplier, which usually can't be
+    // identified from the KAR request — so they default to Blue Rock's
+    // existing placeholder vendor "UNKNOWN" (resolved to its Id at connect
+    // time) and the team reassigns the real supplier in QBO.
+    vendorId: '',
+    vendorName: '',
+    // Sage prefix -> QBO expense account (value = QBO Account Id).
+    // Keys = the 15 prefixes in Blue Rock's System Code mapping plus ITDE,
+    // which appears on real KAR PRs (#28961, #33582) but is missing from the
+    // mapping sheet — target account unconfirmed with Alan. Unknown prefixes
+    // fall back to defaultAccountId.
     accountMap: {
-      OFSU: '', CIVL: '', TOEQ: '', ITDE: '', TOOL: '', IT: '', FURN: '',
+      CHEM: '', CIVL: '', ELEC: '', FIRE: '', FURN: '', INST: '', IT: '',
+      ITDE: '', LABO: '', MECH: '', MEDI: '', OFSU: '', SAFE: '', SRVC: '',
+      STAT: '', TOOL: '',
     },
     defaultAccountId: '',
     tokens: null, // { access_token, refresh_token, expires_at, realmId }

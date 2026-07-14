@@ -5,3 +5,4 @@ samples/
 *.log
 .env
 .DS_Store
+docs/

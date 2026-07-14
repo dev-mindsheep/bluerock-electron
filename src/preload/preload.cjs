@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('api', {
     pickFiles: () => invoke('docs:pick-files'),
     updateExtraction: (id, extraction) => invoke('docs:update-extraction', id, extraction),
     setStatus: (id, status) => invoke('docs:set-status', id, status),
+    setVendor: (id, vendor) => invoke('docs:set-vendor', id, vendor),
     remove: (id) => invoke('docs:delete', id),
     fileUrl: (id) => invoke('docs:file-url', id),
   },
@@ -29,6 +30,7 @@ contextBridge.exposeInMainWorld('api', {
     connect: () => invoke('qb:connect'),
     connectManual: (args) => invoke('qb:connect-manual', args),
     status: () => invoke('qb:status'),
+    vendors: () => invoke('qb:vendors'),
   },
   drive: {
     connect: () => invoke('drive:connect'),
@@ -37,6 +39,7 @@ contextBridge.exposeInMainWorld('api', {
   app: {
     openPath: (p) => invoke('app:open-path', p),
     versions: () => invoke('app:versions'),
+    openLog: () => invoke('logs:open'),
   },
   // File objects from drag-drop don't expose .path in modern Electron — resolve via webUtils.
   pathForFile: (file) => webUtils.getPathForFile(file),

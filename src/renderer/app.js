@@ -162,7 +162,8 @@ async function renderReview(docArg) {
     : `<img src="${state.fileUrl}" alt="document" />`;
 
   const items = ex.line_items || [];
-  const sageOk = (c) => /^(OFSU|CIVL|TOEQ|ITDE|TOOL|IT|FURN)-\d{4,5}$/.test(c || '');
+  // The 15 prefixes from Blue Rock's System Code sheet + ITDE (on real KAR PRs).
+  const sageOk = (c) => /^(CHEM|CIVL|ELEC|FIRE|FURN|INST|IT|ITDE|LABO|MECH|MEDI|OFSU|SAFE|SRVC|STAT|TOOL)-\d{4,5}$/.test(c || '');
 
   main.innerHTML = `
     <div class="toolbar">
@@ -227,6 +228,16 @@ async function renderReview(docArg) {
         <div class="approvals">
           ${(ex.approvals || []).map((a) => `✓ ${esc(a.name)} — ${esc(a.status)} ${esc(a.timestamp || '')}`).join('<br>') || '<span style="color:var(--muted)">None detected</span>'}
         </div>
+
+        <div class="section-title">Supplier (QuickBooks vendor)</div>
+        <div class="field">
+          <select id="vendor-select">
+            <option value="">— placeholder vendor (UNKNOWN) —</option>
+            ${(state.qbVendors || []).map((v) => `<option value="${esc(v.id)}" ${doc.vendorId === v.id ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
+            ${state.qbVendors == null ? '<option disabled>Loading vendor list…</option>' : ''}
+          </select>
+          <div class="hint">The market supplier this bill is payable to. Leave as placeholder if unknown — the team reassigns it in QuickBooks later.</div>
+        </div>
         ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">Pushed ${new Date(doc.qb.pushedAt).toLocaleString()} — ${doc.qb.mock ? 'MOCK entry' : 'Bill Id ' + esc(doc.qb.billId)} ${doc.qb.payloadPath ? `· <a href="#" id="open-payload">view payload</a>` : ''}</div>` : ''}
         ${doc.driveFile ? `<div class="approvals" style="margin-top:6px">Archived to Drive: ${esc(doc.driveFile.path)}</div>` : ''}
       </div>
@@ -242,6 +253,24 @@ async function renderReview(docArg) {
 
   $('#btn-back').onclick = () => { state.view = 'queue'; render(); };
   $('#btn-reextract').onclick = () => extractNow(doc.id);
+
+  const vendorSel = $('#vendor-select');
+  vendorSel.onchange = () => {
+    const name = vendorSel.selectedOptions[0]?.textContent || null;
+    window.api.docs.setVendor(doc.id, vendorSel.value ? { vendorId: vendorSel.value, vendorName: name } : null)
+      .catch((err) => pushStatus(`Could not set vendor: ${err.message}`, 'error'));
+  };
+  // Vendor list loads once per session, lazily, from the connected company.
+  if (state.qbVendors == null && !state.qbVendorsLoading) {
+    state.qbVendorsLoading = true;
+    window.api.qb.vendors()
+      .then((v) => { state.qbVendors = v; })
+      .catch(() => { state.qbVendors = []; })
+      .finally(() => {
+        state.qbVendorsLoading = false;
+        if (state.view === 'review' && state.selectedId === doc.id) renderReview(doc);
+      });
+  }
   $('#open-payload')?.addEventListener('click', (e) => { e.preventDefault(); window.api.app.openPath(doc.qb.payloadPath); });
 
   const collect = () => {
@@ -378,11 +407,12 @@ async function renderSettings() {
               <option value="production" ${s.qb.mode === 'production' ? 'selected' : ''}>Production</option>
             </select>
           </div>
-          ${sInput('Vendor Id (QBO)', 'qb.vendorId', s.qb.vendorId)}
+          ${sInput('Default vendor Id (auto-resolves to UNKNOWN on connect)', 'qb.vendorId', s.qb.vendorId)}
           ${sInput('Client ID', 'qb.clientId', s.qb.clientId)}
           ${sInput('Client Secret', 'qb.clientSecret', s.qb.clientSecret, { type: 'password' })}
-          ${sInput('Vendor name', 'qb.vendorName', s.qb.vendorName)}
+          ${sInput('Default vendor name', 'qb.vendorName', s.qb.vendorName)}
           ${sInput('OAuth redirect port (sandbox)', 'qb.redirectPort', s.qb.redirectPort, { type: 'number' })}
+          ${sInput('Production redirect URI (registered HTTPS callback page)', 'qb.productionRedirectUri', s.qb.productionRedirectUri)}
         </div>
         <div class="section-title">Sage prefix → QBO account Id</div>
         <div class="grid2">
@@ -397,7 +427,7 @@ async function renderSettings() {
           <div class="grid2" style="margin-top:10px">
             <div class="field"><label>Authorization code</label><input id="qb-manual-code" /></div>
             <div class="field"><label>Realm Id</label><input id="qb-manual-realm" /></div>
-            <div class="field" style="grid-column:1/-1"><label>Registered redirect URI (must match the Intuit app exactly)</label><input id="qb-manual-redirect" placeholder="https://yourdomain.com/qb-callback" /></div>
+            <div class="field" style="grid-column:1/-1"><label>Redirect URI used at sign-in (defaults to the production redirect URI above)</label><input id="qb-manual-redirect" value="${esc(s.qb.productionRedirectUri || '')}" /></div>
           </div>
           <button class="btn" id="btn-qb-manual">Exchange code</button>
         </details>
@@ -417,7 +447,18 @@ async function renderSettings() {
         </div>
         <button class="btn" id="btn-drive-connect">Connect to Google Drive…</button>
       </div>
+      <div class="settings-card">
+        <h2>Support</h2>
+        <div class="hint">Questions or problems? Email <a href="mailto:david@mindsheep.com.au">david@mindsheep.com.au</a>.
+        If something failed, attach the error log — <a href="#" id="btn-open-log">open log folder</a> — it contains the
+        details (including QuickBooks intuit_tid references) needed to troubleshoot quickly.</div>
+      </div>
     </div>`;
+
+  $('#btn-open-log').onclick = (e) => {
+    e.preventDefault();
+    window.api.app.openLog().catch((err) => pushStatus(`Could not open log: ${err.message}`, 'error'));
+  };
 
   $('#btn-save-settings').onclick = async () => {
     const patch = {};
