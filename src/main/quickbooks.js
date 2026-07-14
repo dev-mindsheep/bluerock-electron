@@ -111,6 +111,9 @@ async function getAccessToken(qb) {
 export async function startConnect() {
   const settings = getSettings();
   const qb = settings.qb;
+  // Defensive trim — older saved settings may carry pasted whitespace.
+  qb.clientId = (qb.clientId || '').trim();
+  qb.clientSecret = (qb.clientSecret || '').trim();
   if (!qb.clientId || !qb.clientSecret) throw new Error('QuickBooks Client ID / Secret not set');
   const state = crypto.randomBytes(12).toString('hex');
   const port = Number(qb.redirectPort) || 8123;

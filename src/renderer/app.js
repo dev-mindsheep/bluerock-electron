@@ -484,7 +484,9 @@ async function renderSettings() {
       let value;
       if (el.type === 'checkbox') value = el.checked;
       else if (el.type === 'number') value = Number(el.value);
-      else value = el.value;
+      // Trim pasted values — an invisible trailing newline in a credential
+      // (Client ID, API key) makes OAuth requests malformed (Google 400s).
+      else value = el.value.trim();
       if (el.dataset.s === 'general.authorizedSenders') {
         value = el.value.split('\n').map((x) => x.trim()).filter(Boolean);
       }

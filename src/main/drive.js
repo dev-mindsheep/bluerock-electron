@@ -15,6 +15,9 @@ const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 export async function startDriveConnect() {
   const drive = getSettings().drive;
+  // Defensive trim — older saved settings may carry pasted whitespace.
+  drive.clientId = (drive.clientId || '').trim();
+  drive.clientSecret = (drive.clientSecret || '').trim();
   if (!drive.clientId || !drive.clientSecret) throw new Error('Google Drive Client ID / Secret not set');
   const port = Number(drive.redirectPort) || 8124;
   const redirectUri = `http://127.0.0.1:${port}/callback`;
