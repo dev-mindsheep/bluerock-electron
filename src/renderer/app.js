@@ -537,8 +537,15 @@ async function renderSettings() {
 
 // ---------- boot ----------
 (async () => {
+  const splashStart = Date.now();
   await refreshDocs();
   render();
   const v = await window.api.app.versions();
   pushStatus(`Blue Rock Procurement v${v.app} (Electron ${v.electron})`);
+  // Hold the splash a moment so the intro reads as intentional, not a flash.
+  const splash = $('#splash');
+  setTimeout(() => {
+    splash.classList.add('hide');
+    setTimeout(() => splash.remove(), 500);
+  }, Math.max(0, 1400 - (Date.now() - splashStart)));
 })();
