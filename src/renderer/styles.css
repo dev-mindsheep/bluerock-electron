@@ -125,3 +125,18 @@ table.items input.warn { border-color: var(--amber); }
 .badge.off { color: var(--muted); }
 .save-row { position: sticky; bottom: 0; padding: 12px 0; }
 .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+
+/* loading indicators */
+.spin {
+  display: inline-block; width: 12px; height: 12px;
+  border: 2px solid currentColor; border-top-color: transparent;
+  border-radius: 50%; animation: spin .7s linear infinite;
+  vertical-align: -2px; margin-right: 7px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.pill.extracting::before {
+  content: ''; display: inline-block; width: 8px; height: 8px;
+  border: 1.5px solid currentColor; border-top-color: transparent;
+  border-radius: 50%; animation: spin .7s linear infinite;
+  margin-right: 5px; vertical-align: -1px;
+}

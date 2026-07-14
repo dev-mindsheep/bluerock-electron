@@ -51,14 +51,14 @@ export const DEFAULTS = {
     vendorId: '',
     vendorName: '',
     // Sage prefix -> QBO expense account (value = QBO Account Id).
-    // Keys = the 15 prefixes in Blue Rock's System Code mapping plus ITDE,
-    // which appears on real KAR PRs (#28961, #33582) but is missing from the
-    // mapping sheet — target account unconfirmed with Alan. Unknown prefixes
-    // fall back to defaultAccountId.
+    // Keys = the 15 prefixes in Blue Rock's System Code mapping plus ITDE
+    // (real KAR PRs #28961, #33582) and TOEQ (PR #33114), both missing from
+    // the mapping sheet — target accounts unconfirmed with Alan. Unknown
+    // prefixes fall back to defaultAccountId.
     accountMap: {
       CHEM: '', CIVL: '', ELEC: '', FIRE: '', FURN: '', INST: '', IT: '',
       ITDE: '', LABO: '', MECH: '', MEDI: '', OFSU: '', SAFE: '', SRVC: '',
-      STAT: '', TOOL: '',
+      STAT: '', TOEQ: '', TOOL: '',
     },
     defaultAccountId: '',
     tokens: null, // { access_token, refresh_token, expires_at, realmId }

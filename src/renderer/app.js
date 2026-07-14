@@ -28,6 +28,17 @@ function pushStatus(message, level = 'info') {
 }
 window.api.onStatus(({ message, level }) => pushStatus(message, level));
 
+// Swap a button's label for a spinner while an async action runs, so slow
+// operations (extraction, OAuth, pushes) never look stuck. Safe even when the
+// handler re-renders the view — the restored button is simply discarded.
+async function withSpinner(btn, label, fn) {
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span>${label}`;
+  try { return await fn(); }
+  finally { btn.disabled = false; btn.innerHTML = orig; }
+}
+
 // ---------- data ----------
 async function refreshDocs() {
   state.docs = await window.api.docs.list();
@@ -66,14 +77,12 @@ function renderQueue() {
     </div>`;
 
   $('#btn-add').onclick = pickFiles;
-  $('#btn-check-email').onclick = async (e) => {
-    e.target.disabled = true;
+  $('#btn-check-email').onclick = (e) => withSpinner(e.currentTarget, 'Checking…', async () => {
     try {
       const { added, checked } = await window.api.email.checkNow();
       pushStatus(`Email checked: ${checked} unseen message(s), ${added} document(s) added`);
     } catch (err) { pushStatus(err.message, 'error'); }
-    e.target.disabled = false;
-  };
+  });
 
   const dz = $('#dropzone');
   dz.onclick = pickFiles;
@@ -131,13 +140,16 @@ async function openReview(id) {
 }
 
 async function extractNow(id) {
+  state.extractingId = id;
   try {
     pushStatus('Extracting…');
+    if (state.view === 'review' && state.selectedId === id) await renderReview();
     await window.api.extract.run(id);
     pushStatus('Extraction complete');
   } catch (err) {
     pushStatus(`Extraction failed: ${err.message}`, 'error');
   }
+  state.extractingId = null;
   const doc = await window.api.docs.get(id);
   if (state.view === 'review' && state.selectedId === id) renderReview(doc);
 }
@@ -153,6 +165,7 @@ function fieldHtml(label, key, value, { warn = false, type = 'text' } = {}) {
 async function renderReview(docArg) {
   const doc = docArg || (await window.api.docs.get(state.selectedId));
   if (!doc) { state.view = 'queue'; return render(); }
+  const extracting = doc.status === 'extracting' || state.extractingId === doc.id;
   const ex = doc.extraction || {};
   const low = new Set(ex.low_confidence_fields || []);
   const main = $('#main');
@@ -162,20 +175,21 @@ async function renderReview(docArg) {
     : `<img src="${state.fileUrl}" alt="document" />`;
 
   const items = ex.line_items || [];
-  // The 15 prefixes from Blue Rock's System Code sheet + ITDE (on real KAR PRs).
-  const sageOk = (c) => /^(CHEM|CIVL|ELEC|FIRE|FURN|INST|IT|ITDE|LABO|MECH|MEDI|OFSU|SAFE|SRVC|STAT|TOOL)-\d{4,5}$/.test(c || '');
+  // The 15 prefixes from Blue Rock's System Code sheet + ITDE and TOEQ, which
+  // appear on real KAR PRs (#28961/#33582 and #33114) but not on the sheet.
+  const sageOk = (c) => /^(CHEM|CIVL|ELEC|FIRE|FURN|INST|IT|ITDE|LABO|MECH|MEDI|OFSU|SAFE|SRVC|STAT|TOEQ|TOOL)-\d{4,5}$/.test(c || '');
 
   main.innerHTML = `
     <div class="toolbar">
       <button class="btn" id="btn-back">← Queue</button>
       <h1>${esc(doc.fileName)}</h1>
       <span class="pill ${doc.status}">${STATUS_LABEL[doc.status] || doc.status}</span>
-      <button class="btn" id="btn-reextract" ${state.busy ? 'disabled' : ''}>Re-extract</button>
+      <button class="btn" id="btn-reextract" ${state.busy || extracting ? 'disabled' : ''}>${extracting ? '<span class="spin"></span>Extracting…' : 'Re-extract'}</button>
     </div>
     <div class="review">
       <div class="review-left">${viewer}</div>
       <div class="review-right">
-        ${doc.status === 'extracting' ? '<div class="empty">Extracting…</div>' : ''}
+        ${extracting ? '<div class="empty"><span class="spin"></span>Reading the document and extracting its data — this can take up to half a minute…</div>' : ''}
         ${doc.error ? `<div class="meta-line" style="color:var(--red)">Last error: ${esc(doc.error)}</div>` : ''}
         ${ex._method ? `<div class="meta-line">Extracted via <b>${esc(ex._method)}</b>${ex._confidence != null ? ` · parser confidence ${Math.round(ex._confidence * 100)}%` : ''}${low.size ? ` · check highlighted fields` : ''}</div>` : ''}
         <div class="section-title">Header</div>
@@ -316,14 +330,14 @@ async function renderReview(docArg) {
     await window.api.docs.remove(doc.id);
     state.view = 'queue'; render();
   };
-  $('#btn-approve').onclick = async () => {
+  $('#btn-approve').onclick = (e) => withSpinner(e.currentTarget, 'Pushing to QuickBooks…', async () => {
     state.busy = true;
     try {
       await save();
       const updated = await window.api.qb.push(doc.id);
       pushStatus(updated.qb.mock
         ? `MOCK: Bill payload written (${updated.qb.billId})`
-        : `Pushed to QuickBooks — Bill Id ${updated.qb.billId}`);
+        : `Pushed to QuickBooks — Bill Id ${updated.qb.billId}${updated.qb.attachmentError ? ` (attachment failed: ${updated.qb.attachmentError})` : ''}`);
       state.busy = false;
       renderReview(updated);
     } catch (err) {
@@ -331,7 +345,7 @@ async function renderReview(docArg) {
       pushStatus(`Push failed: ${err.message}`, 'error');
       renderReview();
     }
-  };
+  });
 }
 
 // ============================================================ SETTINGS
@@ -460,7 +474,10 @@ async function renderSettings() {
     window.api.app.openLog().catch((err) => pushStatus(`Could not open log: ${err.message}`, 'error'));
   };
 
-  $('#btn-save-settings').onclick = async () => {
+  // Persist everything currently typed into the form. Connect/exchange actions
+  // call this first so they always act on what the user sees — clicking
+  // "Connect" with an unsaved Client ID (or Mode) must never use stale values.
+  const saveForm = async () => {
     const patch = {};
     $$('#main [data-s]').forEach((el) => {
       const keys = el.dataset.s.split('.');
@@ -476,22 +493,27 @@ async function renderSettings() {
       o[keys[keys.length - 1]] = value;
     });
     await window.api.settings.set(patch);
-    pushStatus('Settings saved');
-    renderSettings();
   };
 
-  $('#btn-qb-connect').onclick = async (e) => {
-    e.target.disabled = true;
+  $('#btn-save-settings').onclick = (e) => withSpinner(e.currentTarget, 'Saving…', async () => {
     try {
+      await saveForm();
+      pushStatus('Settings saved');
+      renderSettings();
+    } catch (err) { pushStatus(`Save failed: ${err.message}`, 'error'); }
+  });
+
+  $('#btn-qb-connect').onclick = (e) => withSpinner(e.currentTarget, 'Waiting for QuickBooks sign-in…', async () => {
+    try {
+      await saveForm();
       const res = await window.api.qb.connect();
       pushStatus(res.connected ? `QuickBooks connected (realm ${res.realmId})` : res.message);
     } catch (err) { pushStatus(`QuickBooks connect failed: ${err.message}`, 'error'); }
-    e.target.disabled = false;
     renderSettings();
-  };
-  $('#btn-qb-manual').onclick = async (e) => {
-    e.target.disabled = true;
+  });
+  $('#btn-qb-manual').onclick = (e) => withSpinner(e.currentTarget, 'Exchanging code…', async () => {
     try {
+      await saveForm();
       const res = await window.api.qb.connectManual({
         code: $('#qb-manual-code').value.trim(),
         realmId: $('#qb-manual-realm').value.trim(),
@@ -499,18 +521,16 @@ async function renderSettings() {
       });
       pushStatus(`QuickBooks connected (realm ${res.realmId})`);
     } catch (err) { pushStatus(`QuickBooks connect failed: ${err.message}`, 'error'); }
-    e.target.disabled = false;
     renderSettings();
-  };
-  $('#btn-drive-connect').onclick = async (e) => {
-    e.target.disabled = true;
+  });
+  $('#btn-drive-connect').onclick = (e) => withSpinner(e.currentTarget, 'Waiting for Google sign-in…', async () => {
     try {
+      await saveForm();
       await window.api.drive.connect();
       pushStatus('Google Drive connected');
     } catch (err) { pushStatus(`Drive connect failed: ${err.message}`, 'error'); }
-    e.target.disabled = false;
     renderSettings();
-  };
+  });
 }
 
 // ---------- boot ----------

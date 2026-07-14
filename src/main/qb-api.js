@@ -16,9 +16,10 @@ function toIsoDate(ddmmyyyy) {
 }
 
 // Sage prefix -> QBO expense account NAME, per Blue Rock's System Code mapping
-// sheet (docs/System Code.xlsx, received 2026-07-09). ITDE is not on the sheet
-// but appears on real KAR PRs (#28961, #33582); Purchase - IT is the assumed
-// target pending Alan's confirmation.
+// sheet (docs/System Code.xlsx, received 2026-07-09). ITDE and TOEQ are not on
+// the sheet but appear on real KAR PRs (ITDE: #28961, #33582; TOEQ: #33114);
+// Purchase - IT and Purchase - Misc are the assumed targets pending Alan's
+// confirmation.
 export const SAGE_ACCOUNT_NAMES = {
   CHEM: 'Purchase - Misc',
   CIVL: 'Purchase - Civil',
@@ -35,6 +36,7 @@ export const SAGE_ACCOUNT_NAMES = {
   SAFE: 'Purchase - Tech & HSE',
   SRVC: 'Purchase - Misc',
   STAT: 'Purchase - Stationery',
+  TOEQ: 'Purchase - Misc',
   TOOL: 'Purchase - Misc',
 };
 
