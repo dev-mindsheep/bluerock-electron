@@ -26,7 +26,10 @@ export async function startDriveConnect() {
     response_type: 'code',
     scope: SCOPE,
     access_type: 'offline',
-    prompt: 'consent',
+    // select_account: always show the account chooser — the default browser is
+    // usually signed into personal accounts, and the archive must land on the
+    // dedicated mailbox account (an Internal app 400s for outside-org accounts).
+    prompt: 'consent select_account',
     state,
   });
 
