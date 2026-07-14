@@ -62,7 +62,7 @@ export async function pushToQuickBooks(doc, settings) {
   let attachmentError = null;
   if (billId && doc.filePath && fs.existsSync(doc.filePath)) {
     try {
-      attachment = await uploadAttachment(qb.mode, accessToken, realmId, billId, doc.filePath);
+      attachment = await uploadAttachment(qb.mode, accessToken, realmId, billId, doc.filePath, doc.fileName);
     } catch (err) {
       attachmentError = err.message;
     }

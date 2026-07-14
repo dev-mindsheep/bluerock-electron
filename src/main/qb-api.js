@@ -171,8 +171,12 @@ const CONTENT_TYPES = {
  * Attach a source document to a QBO entity (Bill) via the Attachments API.
  * Multipart upload: file_metadata_01 (AttachableRef JSON) + file_content_01.
  */
-export async function uploadAttachment(mode, accessToken, realmId, billId, filePath) {
-  const fileName = path.basename(filePath);
+export async function uploadAttachment(mode, accessToken, realmId, billId, filePath, displayName) {
+  // Show the original filename in QBO, not the internal storage name —
+  // extension must stay true to the stored file's actual type.
+  const fileName = displayName && path.extname(displayName).toLowerCase() === path.extname(filePath).toLowerCase()
+    ? displayName
+    : path.basename(filePath);
   const contentType = CONTENT_TYPES[path.extname(fileName).toLowerCase()] || 'application/octet-stream';
   const metadata = {
     FileName: fileName,
