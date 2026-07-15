@@ -61,6 +61,18 @@ export const DEFAULTS = {
       STAT: '', TOEQ: '', TOOL: '',
     },
     defaultAccountId: '',
+    // Invoice to KAR (accounts receivable), created alongside the supplier bill
+    // when enabled. Line price = unit cost x (1 + margin%). The customer is
+    // Blue Rock's QBO customer record for KAR — resolved from customerName to
+    // its Id on first push (or set the Id manually). Invoice lines need a QBO
+    // Product/Service item; one named invoiceItemName is looked up and created
+    // (as a Service item) if the company doesn't have it yet.
+    createInvoice: false,
+    defaultMarginPct: 0,
+    customerId: '',
+    customerName: 'KAR',
+    invoiceItemId: '',
+    invoiceItemName: 'KAR Procurement',
     tokens: null, // { access_token, refresh_token, expires_at, realmId }
   },
   drive: {

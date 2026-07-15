@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getSettings, saveSettings } from './settings.js';
-import { apiBase, buildBillPayload, listVendors, resolveCompanyIds, uploadAttachment } from './qb-api.js';
+import { apiBase, buildBillPayload, buildInvoicePayload, listVendors, qbPost, resolveCompanyIds, resolveInvoiceRefs, uploadAttachment } from './qb-api.js';
 
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
@@ -26,18 +26,47 @@ export async function pushToQuickBooks(doc, settings) {
     payload.VendorRef = { value: String(doc.vendorId), name: doc.vendorName || undefined };
   }
 
+  // Fail before anything is created: an invoice without a unit cost on every
+  // line would bill KAR wrong numbers, so the reviewer must finish pricing
+  // first (or invoicing must be turned off in Settings).
+  if (qb.createInvoice) {
+    const unpriced = (doc.extraction.line_items || [])
+      .map((li, i) => (li.unit_cost == null ? i + 1 : null))
+      .filter(Boolean);
+    if (unpriced.length) {
+      throw new Error(`Line ${unpriced.join(', ')} has no unit cost — enter costs on the review screen, or untick "Create KAR invoice" in Settings`);
+    }
+  }
+
   if (qb.mode === 'mock') {
     const dir = path.join(app.getPath('userData'), 'qb-outbox');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${payload.DocNumber || doc.id}.json`);
     fs.writeFileSync(file, JSON.stringify({ createdAt: new Date().toISOString(), payload }, null, 2));
-    return { mock: true, billId: `MOCK-${(payload.DocNumber || doc.id)}`, docNumber: payload.DocNumber, payloadPath: file };
+    let invoiceId = null;
+    if (qb.createInvoice) {
+      const invoicePayload = buildInvoicePayload(doc.extraction, { ...qb, customerId: qb.customerId || 'MOCK', invoiceItemId: qb.invoiceItemId || 'MOCK' });
+      fs.writeFileSync(path.join(dir, `${payload.DocNumber || doc.id}-invoice.json`),
+        JSON.stringify({ createdAt: new Date().toISOString(), payload: invoicePayload }, null, 2));
+      invoiceId = `MOCK-INV-${payload.DocNumber || doc.id}`;
+    }
+    return { mock: true, billId: `MOCK-${(payload.DocNumber || doc.id)}`, docNumber: payload.DocNumber, payloadPath: file, invoiceId, invoiceDocNumber: invoiceId };
   }
 
   if (!doc.vendorId && !qb.vendorId) throw new Error('No vendor: pick one on the review screen, or connect to QuickBooks so the placeholder vendor resolves (Settings > QuickBooks)');
   const accessToken = await getAccessToken(qb);
   const realmId = qb.tokens?.realmId;
   if (!realmId) throw new Error('Not connected to QuickBooks — run Connect first');
+
+  // Resolve the invoice's customer + item BEFORE creating the bill, so a
+  // misconfigured invoice setting fails the push cleanly instead of leaving a
+  // bill behind with no invoice. Resolved Ids persist for later pushes.
+  let invoiceQb = null;
+  if (qb.createInvoice) {
+    const refsPatch = await resolveInvoiceRefs(qb.mode, accessToken, realmId, qb);
+    if (Object.keys(refsPatch).length) saveSettings({ qb: refsPatch });
+    invoiceQb = { ...qb, ...refsPatch };
+  }
 
   const res = await fetch(`${apiBase(qb.mode)}/v3/company/${realmId}/bill?minorversion=75`, {
     method: 'POST',
@@ -67,7 +96,24 @@ export async function pushToQuickBooks(doc, settings) {
       attachmentError = err.message;
     }
   }
-  return { mock: false, billId, docNumber: payload.DocNumber, attachment, attachmentError };
+
+  // Invoice to KAR (cost + margin). The bill exists at this point, so an
+  // invoice failure must not fail the push — surface it so the reviewer can
+  // raise the invoice in QBO by hand.
+  let invoiceId = null;
+  let invoiceDocNumber = null;
+  let invoiceError = null;
+  if (invoiceQb) {
+    try {
+      const body = await qbPost(qb.mode, accessToken, realmId, 'invoice', buildInvoicePayload(doc.extraction, invoiceQb));
+      invoiceId = body.Invoice?.Id;
+      invoiceDocNumber = body.Invoice?.DocNumber;
+    } catch (err) {
+      invoiceError = err.message;
+    }
+  }
+
+  return { mock: false, billId, docNumber: payload.DocNumber, attachment, attachmentError, invoiceId, invoiceDocNumber, invoiceError };
 }
 
 // ---------------- OAuth ----------------

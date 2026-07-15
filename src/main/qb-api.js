@@ -47,6 +47,20 @@ export const DEFAULT_ACCOUNT_NAME = 'Purchase - Misc';
 // invoices). Bills default to it; the team reassigns the real supplier in QBO.
 export const PLACEHOLDER_VENDOR_NAME = 'UNKNOWN';
 
+const round2 = (n) => Math.round(n * 100) / 100;
+
+/** Reviewer-entered unit cost x qty; 0 when no cost was entered (legacy $0 flow). */
+function lineCost(li) {
+  if (li.unit_cost == null || !(li.qty > 0)) return 0;
+  return round2(li.unit_cost * li.qty);
+}
+
+/** Effective margin % for a line: per-line override, else the settings default. */
+function lineMarginPct(li, qb) {
+  const m = li.margin_pct ?? qb.defaultMarginPct;
+  return Number.isFinite(Number(m)) ? Number(m) : 0;
+}
+
 /** Build the QBO Bill payload from a reviewed extraction. */
 export function buildBillPayload(extraction, qb) {
   const lines = (extraction.line_items || []).map((li) => {
@@ -54,9 +68,9 @@ export function buildBillPayload(extraction, qb) {
     const accountId = qb.accountMap?.[prefix] || qb.defaultAccountId || '';
     return {
       DetailType: 'AccountBasedExpenseLineDetail',
-      // Amounts unknown at intake — entries land at 0.00 in review-pending state;
-      // Alan's team adds cost + margin in QBO before approving the bill.
-      Amount: 0,
+      // Reviewer-entered unit cost x qty; lines without a cost land at 0.00
+      // in review-pending state and the team completes them in QBO.
+      Amount: lineCost(li),
       Description: [
         li.description,
         li.qty != null ? `Qty: ${li.qty} ${li.uom || ''}`.trim() : null,
@@ -84,6 +98,47 @@ export function buildBillPayload(extraction, qb) {
   };
 }
 
+/**
+ * Build the QBO Invoice payload (receivable to KAR) from a reviewed extraction.
+ * Line price = unit cost x (1 + margin%). Lines keep the same descriptions as
+ * the bill so the two documents reconcile visually. QBO assigns the invoice
+ * number from the company's own AR sequence (no DocNumber sent).
+ */
+export function buildInvoicePayload(extraction, qb) {
+  const ref = `${extraction.doc_type === 'service_request' ? 'SR' : 'PR'} #${extraction.number || '?'}`;
+  const lines = (extraction.line_items || []).map((li) => {
+    const qty = li.qty > 0 ? li.qty : 1;
+    const unitPrice = round2((li.unit_cost || 0) * (1 + lineMarginPct(li, qb) / 100));
+    return {
+      DetailType: 'SalesItemLineDetail',
+      Amount: round2(unitPrice * qty),
+      Description: [
+        li.description,
+        li.sage_code,
+        li.purpose,
+      ].filter(Boolean).join(' | ').slice(0, 4000),
+      SalesItemLineDetail: {
+        ItemRef: { value: String(qb.invoiceItemId) },
+        Qty: qty,
+        UnitPrice: unitPrice,
+      },
+    };
+  });
+
+  return {
+    CustomerRef: { value: String(qb.customerId), name: qb.customerName || undefined },
+    // Invoice is dated when it's raised, not when KAR raised the request.
+    TxnDate: new Date().toISOString().slice(0, 10),
+    CustomerMemo: { value: `KAR ${extraction.doc_type === 'service_request' ? 'Service' : 'Purchase'} Request ${ref.replace(/^\w+ /, '')}` },
+    PrivateNote: [
+      `KAR ${ref}`,
+      extraction.department ? `Dept: ${extraction.department}` : null,
+      extraction.project_site ? `Site: ${extraction.project_site}` : null,
+    ].filter(Boolean).join(' | ').slice(0, 4000),
+    Line: lines,
+  };
+}
+
 async function qbGet(mode, accessToken, urlPath) {
   const res = await fetch(`${apiBase(mode)}${urlPath}`, {
     headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
@@ -100,6 +155,74 @@ async function qbGet(mode, accessToken, urlPath) {
 async function query(mode, accessToken, realmId, q) {
   const body = await qbGet(mode, accessToken, realmId && `/v3/company/${realmId}/query?minorversion=75&query=${encodeURIComponent(q)}`);
   return body.QueryResponse || {};
+}
+
+export async function qbPost(mode, accessToken, realmId, entity, payload) {
+  const res = await fetch(`${apiBase(mode)}/v3/company/${realmId}/${entity}?minorversion=75`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = body?.Fault?.Error?.[0];
+    const tid = res.headers.get('intuit_tid');
+    throw new Error(`QuickBooks error ${res.status}: ${detail?.Message || ''} ${detail?.Detail || ''}${tid ? ` [intuit_tid ${tid}]` : ''}`.trim());
+  }
+  return body;
+}
+
+const escQ = (s) => String(s).replace(/'/g, "\\'");
+
+/**
+ * Resolve what the Invoice payload needs: the KAR customer Id (looked up from
+ * customerName when the Id isn't set) and the Product/Service item invoice
+ * lines must reference (looked up by invoiceItemName; created as a Service item
+ * on the company's first income account if it doesn't exist yet). Returns a
+ * partial qb-settings patch with the resolved Ids, or throws with a message
+ * that tells the user exactly which Settings field to fix.
+ */
+export async function resolveInvoiceRefs(mode, accessToken, realmId, qb) {
+  const patch = {};
+
+  if (!qb.customerId) {
+    if (!qb.customerName) throw new Error('Invoice customer not set (Settings > QuickBooks > Invoice customer name)');
+    const customers = (await query(mode, accessToken, realmId,
+      `select Id, DisplayName from Customer where DisplayName = '${escQ(qb.customerName)}'`)).Customer || [];
+    if (!customers.length) {
+      throw new Error(`No QuickBooks customer named "${qb.customerName}" — check Settings > QuickBooks > Invoice customer name against the company's customer list`);
+    }
+    patch.customerId = String(customers[0].Id);
+    patch.customerName = customers[0].DisplayName;
+  }
+
+  if (!qb.invoiceItemId) {
+    const itemName = qb.invoiceItemName || 'KAR Procurement';
+    const items = (await query(mode, accessToken, realmId,
+      `select Id, Name from Item where Name = '${escQ(itemName)}'`)).Item || [];
+    if (items.length) {
+      patch.invoiceItemId = String(items[0].Id);
+    } else {
+      // First run on this company: create the Service item invoice lines hang
+      // off, on the company's first income account.
+      const income = (await query(mode, accessToken, realmId,
+        "select Id, Name from Account where AccountType = 'Income' maxresults 1")).Account || [];
+      if (!income.length) throw new Error('Could not create the invoice item: the company has no income account');
+      const created = await qbPost(mode, accessToken, realmId, 'item', {
+        Name: itemName,
+        Type: 'Service',
+        IncomeAccountRef: { value: String(income[0].Id) },
+      });
+      patch.invoiceItemId = String(created.Item?.Id);
+    }
+    patch.invoiceItemName = itemName;
+  }
+
+  return patch;
 }
 
 /**

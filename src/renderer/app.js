@@ -165,6 +165,9 @@ function fieldHtml(label, key, value, { warn = false, type = 'text' } = {}) {
 async function renderReview(docArg) {
   const doc = docArg || (await window.api.docs.get(state.selectedId));
   if (!doc) { state.view = 'queue'; return render(); }
+  const cfg = state.settings = await window.api.settings.get();
+  const invoicing = !!cfg.qb.createInvoice;
+  const defMargin = Number(cfg.qb.defaultMarginPct) || 0;
   const extracting = doc.status === 'extracting' || state.extractingId === doc.id;
   const ex = doc.extraction || {};
   const low = new Set(ex.low_confidence_fields || []);
@@ -223,7 +226,7 @@ async function renderReview(docArg) {
 
         <div class="section-title">Line items (${items.length}) <button class="btn" id="btn-add-item" style="padding:2px 10px;font-size:11px;margin-left:8px">+ row</button></div>
         <table class="items">
-          <thead><tr><th style="width:26px">#</th><th>Description</th><th style="width:64px">Qty</th><th style="width:74px">UoM</th><th style="width:110px">Sage code</th><th>Purpose</th><th style="width:26px"></th></tr></thead>
+          <thead><tr><th style="width:26px">#</th><th>Description</th><th style="width:56px">Qty</th><th style="width:64px">UoM</th><th style="width:78px">Unit cost</th><th style="width:64px">Margin %</th><th style="width:104px">Sage code</th><th>Purpose</th><th style="width:26px"></th></tr></thead>
           <tbody id="items-body">
             ${items.map((li, i) => `
               <tr data-i="${i}">
@@ -231,12 +234,15 @@ async function renderReview(docArg) {
                 <td><input data-li="description" value="${esc(li.description ?? '')}" /></td>
                 <td><input data-li="qty" type="number" value="${esc(li.qty ?? '')}" class="${li.qty > 0 ? '' : 'warn'}" /></td>
                 <td><input data-li="uom" value="${esc(li.uom ?? '')}" /></td>
+                <td><input data-li="unit_cost" type="number" min="0" step="0.01" value="${esc(li.unit_cost ?? '')}" class="${invoicing && li.unit_cost == null ? 'warn' : ''}" /></td>
+                <td><input data-li="margin_pct" type="number" step="0.1" value="${esc(li.margin_pct ?? '')}" placeholder="${defMargin}" /></td>
                 <td><input data-li="sage_code" value="${esc(li.sage_code ?? '')}" class="${sageOk(li.sage_code) ? '' : 'warn'}" /></td>
                 <td><input data-li="purpose" value="${esc(li.purpose ?? '')}" /></td>
                 <td><button class="btn danger" data-del="${i}" style="padding:2px 7px;font-size:11px">✕</button></td>
               </tr>`).join('')}
           </tbody>
         </table>
+        <div class="meta-line" id="line-totals" style="text-align:right;margin-top:4px"></div>
 
         <div class="section-title">Approval chain</div>
         <div class="approvals">
@@ -252,7 +258,7 @@ async function renderReview(docArg) {
           </select>
           <div class="hint">The market supplier this bill is payable to. Leave as placeholder if unknown — the team reassigns it in QuickBooks later.</div>
         </div>
-        ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">Pushed ${new Date(doc.qb.pushedAt).toLocaleString()} — ${doc.qb.mock ? 'MOCK entry' : 'Bill Id ' + esc(doc.qb.billId)} ${doc.qb.payloadPath ? `· <a href="#" id="open-payload">view payload</a>` : ''}</div>` : ''}
+        ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">Pushed ${new Date(doc.qb.pushedAt).toLocaleString()} — ${doc.qb.mock ? 'MOCK entry' : 'Bill Id ' + esc(doc.qb.billId)}${doc.qb.invoiceId ? ` · Invoice ${doc.qb.invoiceDocNumber ? 'no. ' + esc(doc.qb.invoiceDocNumber) : 'Id ' + esc(doc.qb.invoiceId)}` : ''}${doc.qb.invoiceError ? ` · <span style="color:var(--red)">invoice failed: ${esc(doc.qb.invoiceError)}</span>` : ''} ${doc.qb.payloadPath ? `· <a href="#" id="open-payload">view payload</a>` : ''}</div>` : ''}
         ${doc.driveFile ? `<div class="approvals" style="margin-top:6px">Archived to Drive: ${esc(doc.driveFile.path)}</div>` : ''}
       </div>
     </div>
@@ -293,7 +299,7 @@ async function renderReview(docArg) {
     out.line_items = $$('#items-body tr').map((tr, i) => {
       const li = {};
       $$('input[data-li]', tr).forEach((el) => {
-        li[el.dataset.li] = el.dataset.li === 'qty'
+        li[el.dataset.li] = ['qty', 'unit_cost', 'margin_pct'].includes(el.dataset.li)
           ? (el.value === '' ? null : Number(el.value))
           : (el.value === '' ? null : el.value);
       });
@@ -302,6 +308,25 @@ async function renderReview(docArg) {
     });
     return out;
   };
+
+  // Live bill/invoice totals under the line items table.
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const recalcTotals = () => {
+    let bill = 0;
+    let inv = 0;
+    $$('#items-body tr').forEach((tr) => {
+      const qty = Number($('input[data-li="qty"]', tr)?.value) || 0;
+      const cost = Number($('input[data-li="unit_cost"]', tr)?.value) || 0;
+      const mRaw = $('input[data-li="margin_pct"]', tr)?.value ?? '';
+      const m = mRaw === '' ? defMargin : Number(mRaw) || 0;
+      bill += r2(cost * qty);
+      inv += r2(r2(cost * (1 + m / 100)) * qty);
+    });
+    const el = $('#line-totals');
+    if (el) el.textContent = `Bill total (cost): ${bill.toFixed(2)}${invoicing ? ` · KAR invoice total (cost + margin): ${inv.toFixed(2)}` : ''}`;
+  };
+  $('#items-body')?.addEventListener('input', recalcTotals);
+  recalcTotals();
 
   const save = async () => {
     const updated = collect();
@@ -313,7 +338,7 @@ async function renderReview(docArg) {
   $('#btn-save').onclick = () => save().then(() => renderReview());
   $('#btn-add-item').onclick = async () => {
     const updated = collect();
-    updated.line_items.push({ no: updated.line_items.length + 1, description: '', qty: null, uom: 'Piece', sage_code: '', purpose: '' });
+    updated.line_items.push({ no: updated.line_items.length + 1, description: '', qty: null, uom: 'Piece', unit_cost: null, margin_pct: null, sage_code: '', purpose: '' });
     await window.api.docs.updateExtraction(doc.id, updated);
     renderReview();
   };
@@ -336,8 +361,9 @@ async function renderReview(docArg) {
       await save();
       const updated = await window.api.qb.push(doc.id);
       pushStatus(updated.qb.mock
-        ? `MOCK: Bill payload written (${updated.qb.billId})`
-        : `Pushed to QuickBooks — Bill Id ${updated.qb.billId}${updated.qb.attachmentError ? ` (attachment failed: ${updated.qb.attachmentError})` : ''}`);
+        ? `MOCK: Bill payload written (${updated.qb.billId})${updated.qb.invoiceId ? ' + invoice payload' : ''}`
+        : `Pushed to QuickBooks — Bill Id ${updated.qb.billId}${updated.qb.invoiceId ? ` · Invoice no. ${updated.qb.invoiceDocNumber || updated.qb.invoiceId}` : ''}${updated.qb.invoiceError ? ` (invoice failed: ${updated.qb.invoiceError})` : ''}${updated.qb.attachmentError ? ` (attachment failed: ${updated.qb.attachmentError})` : ''}`,
+        updated.qb.invoiceError ? 'error' : 'info');
       state.busy = false;
       renderReview(updated);
     } catch (err) {
@@ -412,7 +438,7 @@ async function renderSettings() {
 
       <div class="settings-card">
         <h2>QuickBooks Online <span class="badge ${qbSt.connected ? 'on' : 'off'}">${qbSt.connected ? `connected (realm ${esc(qbSt.realmId)})` : 'not connected'}</span></h2>
-        <div class="hint">Mock mode needs no Intuit account: approved entries are written as Bill payload JSON files you can inspect (qb-outbox). Sandbox/production use your Intuit developer app credentials. Bills are created at $0.00 in review-pending state — your team adds cost, margin and final categories in QBO.</div>
+        <div class="hint">Mock mode needs no Intuit account: approved entries are written as Bill payload JSON files you can inspect (qb-outbox). Sandbox/production use your Intuit developer app credentials. Bills carry the unit costs entered on the review screen (lines without a cost land at 0.00 for the team to complete in QBO).</div>
         <div class="grid2">
           <div class="field"><label>Mode</label>
             <select data-s="qb.mode">
@@ -427,6 +453,18 @@ async function renderSettings() {
           ${sInput('Default vendor name', 'qb.vendorName', s.qb.vendorName)}
           ${sInput('OAuth redirect port (sandbox)', 'qb.redirectPort', s.qb.redirectPort, { type: 'number' })}
           ${sInput('Production redirect URI (registered HTTPS callback page)', 'qb.productionRedirectUri', s.qb.productionRedirectUri)}
+        </div>
+        <div class="section-title">KAR invoice (accounts receivable)</div>
+        <div class="hint">When enabled, each push also creates the invoice to KAR: line price = unit cost × (1 + margin %). Every line then needs a unit cost on the review screen. The customer name must match Blue Rock's QBO customer record for KAR — its Id resolves on the first push. Invoice lines use a Product/Service item, created automatically if the company doesn't have one by that name.</div>
+        <div class="inline" style="margin-bottom:10px">
+          <label><input type="checkbox" data-s="qb.createInvoice" ${s.qb.createInvoice ? 'checked' : ''}/> Create KAR invoice on push</label>
+        </div>
+        <div class="grid2">
+          ${sInput('Default margin %', 'qb.defaultMarginPct', s.qb.defaultMarginPct, { type: 'number' })}
+          ${sInput('Invoice customer name (QBO customer for KAR)', 'qb.customerName', s.qb.customerName)}
+          ${sInput('Invoice customer Id (auto-resolves from the name)', 'qb.customerId', s.qb.customerId)}
+          ${sInput('Invoice item name (Product/Service)', 'qb.invoiceItemName', s.qb.invoiceItemName)}
+          ${sInput('Invoice item Id (auto-resolves / auto-creates)', 'qb.invoiceItemId', s.qb.invoiceItemId)}
         </div>
         <div class="section-title">Sage prefix → QBO account Id</div>
         <div class="grid2">
