@@ -241,22 +241,43 @@ export async function resolveInvoiceRefs(mode, accessToken, realmId, qb, opts = 
 
   if (opts.needServiceTicket && !qb.serviceTicketFieldId) {
     const label = (qb.serviceTicketFieldName || 'Service Ticket').trim();
+    const lc = label.toLowerCase();
+    const seen = new Map(); // label -> DefinitionId, for the error message
+
+    // Companies on the classic custom-fields experience expose the labels via
+    // Preferences: SalesFormsPrefs.CustomField groups hold entries named
+    // SalesFormsPrefs.SalesCustomName1..3 — the trailing digit is the
+    // DefinitionId invoices reference.
     const prefs = await qbGet(mode, accessToken, `/v3/company/${realmId}/preferences?minorversion=75`);
-    // SalesFormsPrefs.CustomField is an array of groups, each holding entries
-    // named SalesFormsPrefs.SalesCustomName1..3 (the labels) — the trailing
-    // digit is the DefinitionId invoices reference.
     const groups = prefs?.Preferences?.SalesFormsPrefs?.CustomField || [];
-    const entries = groups.flatMap((g) => g.CustomField || []);
-    const match = entries.find((f) => /^SalesFormsPrefs\.SalesCustomName\d$/.test(f.Name || '')
-      && (f.StringValue || '').trim().toLowerCase() === label.toLowerCase());
-    if (!match) {
-      const have = entries
-        .filter((f) => /^SalesFormsPrefs\.SalesCustomName\d$/.test(f.Name || '') && f.StringValue)
-        .map((f) => `"${f.StringValue}"`).join(', ');
-      throw new Error(`No custom field labelled "${label}" on the QuickBooks sales forms${have ? ` (company has: ${have})` : ''} — fix Settings > QuickBooks > Service ticket field name, or clear the document's Service ticket box`);
+    for (const f of groups.flatMap((g) => g.CustomField || [])) {
+      if (/^SalesFormsPrefs\.SalesCustomName\d$/.test(f.Name || '') && f.StringValue) {
+        seen.set(f.StringValue.trim(), f.Name.slice(-1));
+      }
     }
-    patch.serviceTicketFieldId = match.Name.slice(-1);
-    patch.serviceTicketFieldName = match.StringValue.trim();
+
+    // Companies migrated to QBO's NEW custom-fields experience return nothing
+    // through Preferences — but existing invoices still carry the field with
+    // its DefinitionId, so scan recent invoices for the label.
+    if (![...seen.keys()].some((k) => k.toLowerCase() === lc)) {
+      const invoices = (await query(mode, accessToken, realmId,
+        'select * from Invoice orderby MetaData.LastUpdatedTime desc maxresults 30')).Invoice || [];
+      for (const inv of invoices) {
+        for (const cf of inv.CustomField || []) {
+          if (cf.Name && cf.DefinitionId != null && !seen.has(cf.Name.trim())) {
+            seen.set(cf.Name.trim(), String(cf.DefinitionId));
+          }
+        }
+      }
+    }
+
+    const hit = [...seen.entries()].find(([name]) => name.toLowerCase() === lc);
+    if (!hit) {
+      const have = [...seen.keys()].map((n) => `"${n}"`).join(', ');
+      throw new Error(`No custom field labelled "${label}" found on the QuickBooks invoice form${have ? ` (fields seen: ${have})` : ' (none found via Preferences or the company\'s recent invoices)'} — fix Settings > QuickBooks > Service ticket field name, type the field Id (1, 2 or 3) into Service ticket field Id directly, or clear the document's Service ticket box`);
+    }
+    patch.serviceTicketFieldId = hit[1];
+    patch.serviceTicketFieldName = hit[0];
   }
 
   return patch;
