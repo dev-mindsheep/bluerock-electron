@@ -88,14 +88,11 @@ export function buildBillPayload(extraction, qb) {
     VendorRef: { value: String(qb.vendorId || ''), name: qb.vendorName || undefined },
     TxnDate: toIsoDate(extraction.date),
     DocNumber: extraction.number ? `${extraction.doc_type === 'service_request' ? 'SR' : 'PR'}-${extraction.number}` : undefined,
-    PrivateNote: [
-      `KAR ${extraction.doc_type === 'service_request' ? 'Service' : 'Purchase'} Request #${extraction.number || '?'}`,
-      extraction.department ? `Dept: ${extraction.department}` : null,
-      extraction.project_site ? `Site: ${extraction.project_site}` : null,
-      extraction.requester_name ? `Requester: ${extraction.requester_name}` : null,
-      serviceTicket ? `Service Ticket: ${serviceTicket}` : null,
-      extraction.note ? `Note: ${extraction.note}` : null,
-    ].filter(Boolean).join(' | ').slice(0, 4000),
+    // Memo carries only the Service Ticket value, for cross-referencing with
+    // the KAR invoice (Blue Rock's request, 2026-07-15) — the PR/SR reference
+    // is already the bill number, and dept/site/requester live on the
+    // attached source document.
+    PrivateNote: serviceTicket ? serviceTicket.slice(0, 4000) : undefined,
     Line: lines,
   };
 }
