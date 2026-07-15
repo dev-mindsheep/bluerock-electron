@@ -258,7 +258,7 @@ async function renderReview(docArg) {
           </select>
           <div class="hint">The market supplier this bill is payable to. Leave as placeholder if unknown — the team reassigns it in QuickBooks later.</div>
         </div>
-        ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">Pushed ${new Date(doc.qb.pushedAt).toLocaleString()} — ${doc.qb.mock ? 'MOCK entry' : 'Bill Id ' + esc(doc.qb.billId)}${doc.qb.invoiceId ? ` · Invoice ${doc.qb.invoiceDocNumber ? 'no. ' + esc(doc.qb.invoiceDocNumber) : 'Id ' + esc(doc.qb.invoiceId)}` : ''}${doc.qb.invoiceError ? ` · <span style="color:var(--red)">invoice failed: ${esc(doc.qb.invoiceError)}</span>` : ''} ${doc.qb.payloadPath ? `· <a href="#" id="open-payload">view payload</a>` : ''}</div>` : ''}
+        ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">Pushed ${new Date(doc.qb.pushedAt).toLocaleString()} — ${doc.qb.mock ? 'MOCK entry' : `Bill ${doc.qb.docNumber ? 'no. ' + esc(doc.qb.docNumber) + ' · Id ' + esc(doc.qb.billId) : 'Id ' + esc(doc.qb.billId)}`}${doc.qb.invoiceId ? ` · Invoice ${doc.qb.invoiceDocNumber ? 'no. ' + esc(doc.qb.invoiceDocNumber) : 'Id ' + esc(doc.qb.invoiceId)}` : ''}${doc.qb.invoiceError ? ` · <span style="color:var(--red)">invoice failed: ${esc(doc.qb.invoiceError)}</span>` : ''} ${doc.qb.payloadPath ? `· <a href="#" id="open-payload">view payload</a>` : ''}</div>` : ''}
         ${doc.driveFile ? `<div class="approvals" style="margin-top:6px">Archived to Drive: ${esc(doc.driveFile.path)}</div>` : ''}
       </div>
     </div>
@@ -362,7 +362,7 @@ async function renderReview(docArg) {
       const updated = await window.api.qb.push(doc.id);
       pushStatus(updated.qb.mock
         ? `MOCK: Bill payload written (${updated.qb.billId})${updated.qb.invoiceId ? ' + invoice payload' : ''}`
-        : `Pushed to QuickBooks — Bill Id ${updated.qb.billId}${updated.qb.invoiceId ? ` · Invoice no. ${updated.qb.invoiceDocNumber || updated.qb.invoiceId}` : ''}${updated.qb.invoiceError ? ` (invoice failed: ${updated.qb.invoiceError})` : ''}${updated.qb.attachmentError ? ` (attachment failed: ${updated.qb.attachmentError})` : ''}`,
+        : `Pushed to QuickBooks — Bill ${updated.qb.docNumber ? `no. ${updated.qb.docNumber} (Id ${updated.qb.billId})` : `Id ${updated.qb.billId}`}${updated.qb.invoiceId ? ` · Invoice no. ${updated.qb.invoiceDocNumber || updated.qb.invoiceId}` : ''}${updated.qb.invoiceError ? ` (invoice failed: ${updated.qb.invoiceError})` : ''}${updated.qb.attachmentError ? ` (attachment failed: ${updated.qb.attachmentError})` : ''}`,
         updated.qb.invoiceError ? 'error' : 'info');
       state.busy = false;
       renderReview(updated);
