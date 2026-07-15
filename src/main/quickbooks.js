@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getSettings, saveSettings } from './settings.js';
-import { apiBase, buildBillPayload, buildInvoicePayload, listVendors, qbPost, resolveCompanyIds, resolveInvoiceRefs, uploadAttachment } from './qb-api.js';
+import { apiBase, buildBillPayload, buildInvoicePayload, listVendors, nextInvoiceNumber, qbPost, resolveCompanyIds, resolveInvoiceRefs, uploadAttachment } from './qb-api.js';
 
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
@@ -109,7 +109,27 @@ export async function pushToQuickBooks(doc, settings) {
   let invoiceError = null;
   if (invoiceQb) {
     try {
-      const body = await qbPost(qb.mode, accessToken, realmId, 'invoice', buildInvoicePayload(doc.extraction, invoiceQb));
+      const invoicePayload = buildInvoicePayload(doc.extraction, invoiceQb);
+      // The company keeps "Custom transaction numbers" ON, so QBO won't
+      // auto-number API-created invoices — supply the next number in their
+      // sequence. Best-effort: an unnumbered invoice still beats no invoice.
+      try {
+        const n = await nextInvoiceNumber(qb.mode, accessToken, realmId);
+        if (n) invoicePayload.DocNumber = n;
+      } catch { /* push proceeds without a number */ }
+      let body;
+      try {
+        body = await qbPost(qb.mode, accessToken, realmId, 'invoice', invoicePayload);
+      } catch (err) {
+        // Someone typed the same number in QBO between our read and create —
+        // take the next one and retry once.
+        if (invoicePayload.DocNumber && /duplicate document number/i.test(err.message)) {
+          invoicePayload.DocNumber = String(Number(invoicePayload.DocNumber) + 1);
+          body = await qbPost(qb.mode, accessToken, realmId, 'invoice', invoicePayload);
+        } else {
+          throw err;
+        }
+      }
       invoiceId = body.Invoice?.Id;
       invoiceDocNumber = body.Invoice?.DocNumber;
     } catch (err) {

@@ -386,6 +386,25 @@ export async function resolveCompanyIds(mode, accessToken, realmId, qb) {
 }
 
 /**
+ * Next number in the company's invoice sequence. Blue Rock keeps QBO's
+ * "Custom transaction numbers" setting ON (they type numbers on manual
+ * invoices), and under that setting QBO does NOT auto-assign — an API-created
+ * invoice without a DocNumber lands with a blank number. So mirror what QBO's
+ * own UI suggests: the highest numeric DocNumber among recent invoices, plus
+ * one. Returns null when no numeric numbers exist (send nothing and let QBO's
+ * own behavior apply).
+ */
+export async function nextInvoiceNumber(mode, accessToken, realmId) {
+  const rows = (await query(mode, accessToken, realmId,
+    'select DocNumber from Invoice orderby MetaData.CreateTime desc maxresults 300')).Invoice || [];
+  let max = 0;
+  for (const r of rows) {
+    if (/^\d+$/.test(r.DocNumber || '')) max = Math.max(max, Number(r.DocNumber));
+  }
+  return max ? String(max + 1) : null;
+}
+
+/**
  * List active vendors (paginated — QBO caps query pages at 1000 rows).
  * Returns [{ id, name }] sorted by name, for the review screen's vendor picker.
  */
