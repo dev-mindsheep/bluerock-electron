@@ -73,12 +73,41 @@ export const DEFAULTS = {
     customerName: 'KAR',
     invoiceItemId: '',
     invoiceItemName: 'KAR Procurement',
-    // Blue Rock's invoice form carries a "Service Ticket" custom field (e.g.
-    // ST01236 on Invoice 3055). The reviewer types the value per document on
-    // the review screen; the field's QBO DefinitionId (1-3, classic custom
-    // fields) resolves from this label on the first push that uses it.
+    // Blue Rock's invoice form carries three custom fields (seen on real
+    // invoices, e.g. 3055): "PO #" (gets the PR/SR reference), "Service
+    // Ticket" (typed by the reviewer per document), and "Location" (gets the
+    // extracted project site). Each field's QBO DefinitionId resolves from its
+    // label on the first push that needs it. Service Ticket resolution is
+    // strict (the reviewer typed a value expecting it to land); PO #/Location
+    // are best-effort so companies without those fields (sandbox) still push.
     serviceTicketFieldName: 'Service Ticket',
     serviceTicketFieldId: '',
+    poFieldName: 'PO #',
+    poFieldId: '',
+    locationFieldName: 'Location',
+    locationFieldId: '',
+    // Invoice terms, resolved by name on first push (best-effort — QBO's
+    // customer/company default applies if the name isn't found).
+    invoiceTermName: 'Net 30',
+    invoiceTermId: '',
+    // "Message on invoice" (CustomerMemo) — prints on the invoice itself.
+    // Blue Rock's standard wire-transfer instructions; newlines preserved.
+    invoiceMessage: 'For Wire Transfer:\n'
+      + 'Account Name: Al Sakhir Al Azraq for General Trading LTD\n'
+      + 'Account Type: Current - IQD\n'
+      + 'Bank Name: National Bank of Iraq\n'
+      + 'Account Number: 2100014963\n'
+      + 'IBAN Number: IQ16NBIQ857002100014963\n'
+      + 'Swift Code: NBIQIQBA\n'
+      + 'Bank Address: 100M Road, Erbil, Iraq\n'
+      + 'Intermediary Bank:\n'
+      + 'Account Name: Capital Bank of Jordan\n'
+      + 'Account Number: 3612-5139\n'
+      + 'SWIFT: EFBKJOAM',
+    // Sage code -> QBO Item Id cache: invoice lines show the line's Sage code
+    // in the Product/Service column, so each distinct code becomes a Service
+    // item (auto-created on first use, remembered here).
+    itemMap: {},
     tokens: null, // { access_token, refresh_token, expires_at, realmId }
   },
   drive: {

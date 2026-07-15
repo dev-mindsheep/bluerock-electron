@@ -63,10 +63,13 @@ export async function pushToQuickBooks(doc, settings) {
   // bill behind with no invoice. Resolved Ids persist for later pushes.
   let invoiceQb = null;
   if (qb.createInvoice) {
-    const refsPatch = await resolveInvoiceRefs(qb.mode, accessToken, realmId, qb,
-      { needServiceTicket: !!(doc.extraction.service_ticket || '').trim() });
+    const refsPatch = await resolveInvoiceRefs(qb.mode, accessToken, realmId, qb, {
+      needServiceTicket: !!(doc.extraction.service_ticket || '').trim(),
+      sageCodes: (doc.extraction.line_items || []).map((li) => (li.sage_code || '').trim()).filter(Boolean),
+    });
     if (Object.keys(refsPatch).length) saveSettings({ qb: refsPatch });
-    invoiceQb = { ...qb, ...refsPatch };
+    // refsPatch.itemMap only carries newly resolved codes — merge, don't replace.
+    invoiceQb = { ...qb, ...refsPatch, itemMap: { ...qb.itemMap, ...refsPatch.itemMap } };
   }
 
   const res = await fetch(`${apiBase(qb.mode)}/v3/company/${realmId}/bill?minorversion=75`, {

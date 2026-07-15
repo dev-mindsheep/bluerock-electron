@@ -468,6 +468,16 @@ async function renderSettings() {
           ${sInput('Invoice item Id (auto-resolves / auto-creates)', 'qb.invoiceItemId', s.qb.invoiceItemId)}
           ${sInput('Service ticket field name (custom field on the invoice form)', 'qb.serviceTicketFieldName', s.qb.serviceTicketFieldName)}
           ${sInput('Service ticket field Id (auto-resolves from the name)', 'qb.serviceTicketFieldId', s.qb.serviceTicketFieldId)}
+          ${sInput('PO # field name (custom field — gets the PR/SR reference)', 'qb.poFieldName', s.qb.poFieldName)}
+          ${sInput('PO # field Id (auto-resolves from the name)', 'qb.poFieldId', s.qb.poFieldId)}
+          ${sInput('Location field name (custom field — gets the project site)', 'qb.locationFieldName', s.qb.locationFieldName)}
+          ${sInput('Location field Id (auto-resolves from the name)', 'qb.locationFieldId', s.qb.locationFieldId)}
+          ${sInput('Invoice terms (by name)', 'qb.invoiceTermName', s.qb.invoiceTermName)}
+          ${sInput('Invoice terms Id (auto-resolves from the name)', 'qb.invoiceTermId', s.qb.invoiceTermId)}
+          <div class="field" style="grid-column:1/-1">
+            <label>Message on invoice (prints on every KAR invoice — e.g. wire-transfer instructions)</label>
+            <textarea data-s="qb.invoiceMessage" rows="12">${esc(s.qb.invoiceMessage ?? '')}</textarea>
+          </div>
         </div>
         <div class="section-title">Sage prefix → QBO account Id</div>
         <div class="grid2">

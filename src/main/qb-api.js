@@ -101,53 +101,68 @@ export function buildBillPayload(extraction, qb) {
 }
 
 /**
- * Build the QBO Invoice payload (receivable to KAR) from a reviewed extraction.
- * Line price = unit cost x (1 + margin%). Lines keep the same descriptions as
- * the bill so the two documents reconcile visually. QBO assigns the invoice
+ * Build the QBO Invoice payload (receivable to KAR) from a reviewed extraction,
+ * matching Blue Rock's invoice template: PO # / Service Ticket / Location
+ * custom fields, the line's Sage code as the Product/Service item, Net 30
+ * terms, and the standard wire-transfer instructions as the message on the
+ * invoice. Line price = unit cost x (1 + margin%). QBO assigns the invoice
  * number from the company's own AR sequence (no DocNumber sent).
  */
 export function buildInvoicePayload(extraction, qb) {
-  const ref = `${extraction.doc_type === 'service_request' ? 'SR' : 'PR'} #${extraction.number || '?'}`;
+  const prefix = extraction.doc_type === 'service_request' ? 'SR' : 'PR';
+  const ref = `${prefix} #${extraction.number || '?'}`;
   const serviceTicket = (extraction.service_ticket || '').trim();
   const lines = (extraction.line_items || []).map((li) => {
     const qty = li.qty > 0 ? li.qty : 1;
     const unitPrice = round2((li.unit_cost || 0) * (1 + lineMarginPct(li, qb) / 100));
+    // Product/Service column shows the line's Sage code (an Item auto-created
+    // per code, cached in qb.itemMap); lines without a code fall back to the
+    // generic invoice item.
+    const itemId = (li.sage_code && qb.itemMap?.[li.sage_code]) || qb.invoiceItemId;
     return {
       DetailType: 'SalesItemLineDetail',
       Amount: round2(unitPrice * qty),
       Description: [
         li.description,
-        li.sage_code,
         li.purpose,
       ].filter(Boolean).join(' | ').slice(0, 4000),
       SalesItemLineDetail: {
-        ItemRef: { value: String(qb.invoiceItemId) },
+        ItemRef: { value: String(itemId) },
         Qty: qty,
         UnitPrice: unitPrice,
       },
     };
   });
 
+  // Template custom fields. QBO caps custom field values at 31 characters.
+  const cf = (id, name, value) => ({ DefinitionId: String(id), Name: name, Type: 'StringType', StringValue: value.slice(0, 31) });
+  const customFields = [];
+  if (extraction.number && qb.poFieldId) {
+    customFields.push(cf(qb.poFieldId, qb.poFieldName || 'PO #', `${prefix}-${extraction.number}`));
+  }
+  if (serviceTicket && qb.serviceTicketFieldId) {
+    customFields.push(cf(qb.serviceTicketFieldId, qb.serviceTicketFieldName || 'Service Ticket', serviceTicket));
+  }
+  if (extraction.project_site && qb.locationFieldId) {
+    customFields.push(cf(qb.locationFieldId, qb.locationFieldName || 'Location', extraction.project_site));
+  }
+
   return {
     CustomerRef: { value: String(qb.customerId), name: qb.customerName || undefined },
     // Invoice is dated when it's raised, not when KAR raised the request.
     TxnDate: new Date().toISOString().slice(0, 10),
-    CustomerMemo: { value: `KAR ${extraction.doc_type === 'service_request' ? 'Service' : 'Purchase'} Request ${ref.replace(/^\w+ /, '')}` },
+    SalesTermRef: qb.invoiceTermId ? { value: String(qb.invoiceTermId) } : undefined,
+    // "Message on invoice" — the standard wire-transfer instructions (falls
+    // back to the KAR reference if the message is cleared in Settings).
+    CustomerMemo: { value: ((qb.invoiceMessage || '').trim() || `KAR ${prefix === 'SR' ? 'Service' : 'Purchase'} Request #${extraction.number || '?'}`).slice(0, 1000) },
+    // PrivateNote maps to the statement memo — keep the cross-reference there.
     PrivateNote: [
       `KAR ${ref}`,
       extraction.department ? `Dept: ${extraction.department}` : null,
       extraction.project_site ? `Site: ${extraction.project_site}` : null,
       serviceTicket ? `Service Ticket: ${serviceTicket}` : null,
     ].filter(Boolean).join(' | ').slice(0, 4000),
-    // Blue Rock's invoice form carries a "Service Ticket" custom field
-    // (classic sales custom field, DefinitionId 1-3, resolved by label in
-    // resolveInvoiceRefs). QBO caps custom field values at 31 characters.
-    CustomField: serviceTicket && qb.serviceTicketFieldId ? [{
-      DefinitionId: String(qb.serviceTicketFieldId),
-      Name: qb.serviceTicketFieldName || 'Service Ticket',
-      Type: 'StringType',
-      StringValue: serviceTicket.slice(0, 31),
-    }] : undefined,
+    CustomField: customFields.length ? customFields : undefined,
     Line: lines,
   };
 }
@@ -219,32 +234,62 @@ export async function resolveInvoiceRefs(mode, accessToken, realmId, qb, opts = 
     patch.customerName = customers[0].DisplayName;
   }
 
+  // Service items are created on the company's first income account; look it
+  // up once per resolve, only when something actually needs creating.
+  let incomeAccountId = null;
+  const firstIncomeAccount = async () => {
+    if (incomeAccountId) return incomeAccountId;
+    const income = (await query(mode, accessToken, realmId,
+      "select Id, Name from Account where AccountType = 'Income' maxresults 1")).Account || [];
+    if (!income.length) throw new Error('Could not create an invoice item: the company has no income account');
+    incomeAccountId = String(income[0].Id);
+    return incomeAccountId;
+  };
+  const createServiceItem = async (name) => {
+    const created = await qbPost(mode, accessToken, realmId, 'item', {
+      Name: name,
+      Type: 'Service',
+      IncomeAccountRef: { value: await firstIncomeAccount() },
+    });
+    return String(created.Item?.Id);
+  };
+
   if (!qb.invoiceItemId) {
     const itemName = qb.invoiceItemName || 'KAR Procurement';
     const items = (await query(mode, accessToken, realmId,
       `select Id, Name from Item where Name = '${escQ(itemName)}'`)).Item || [];
-    if (items.length) {
-      patch.invoiceItemId = String(items[0].Id);
-    } else {
-      // First run on this company: create the Service item invoice lines hang
-      // off, on the company's first income account.
-      const income = (await query(mode, accessToken, realmId,
-        "select Id, Name from Account where AccountType = 'Income' maxresults 1")).Account || [];
-      if (!income.length) throw new Error('Could not create the invoice item: the company has no income account');
-      const created = await qbPost(mode, accessToken, realmId, 'item', {
-        Name: itemName,
-        Type: 'Service',
-        IncomeAccountRef: { value: String(income[0].Id) },
-      });
-      patch.invoiceItemId = String(created.Item?.Id);
-    }
+    patch.invoiceItemId = items.length ? String(items[0].Id) : await createServiceItem(itemName);
     patch.invoiceItemName = itemName;
   }
 
-  if (opts.needServiceTicket && !qb.serviceTicketFieldId) {
-    const label = (qb.serviceTicketFieldName || 'Service Ticket').trim();
-    const lc = label.toLowerCase();
-    const seen = new Map(); // label -> DefinitionId, for the error message
+  // Product/Service column shows each line's Sage code — one Service item per
+  // distinct code, looked up (or created) once and cached in qb.itemMap.
+  const newCodes = [...new Set(opts.sageCodes || [])].filter((c) => c && !qb.itemMap?.[c]);
+  if (newCodes.length) {
+    const itemMap = {};
+    const nameList = newCodes.map((c) => `'${escQ(c)}'`).join(', ');
+    const found = (await query(mode, accessToken, realmId,
+      `select Id, Name from Item where Name in (${nameList})`)).Item || [];
+    for (const it of found) itemMap[it.Name] = String(it.Id);
+    for (const code of newCodes) {
+      if (!itemMap[code]) itemMap[code] = await createServiceItem(code);
+    }
+    patch.itemMap = itemMap; // deep-merged into the existing cache on save
+  }
+
+  if (!qb.invoiceTermId && qb.invoiceTermName) {
+    // Best-effort: without a match, QBO falls back to the customer/company
+    // default terms — not worth failing the push over.
+    const terms = (await query(mode, accessToken, realmId,
+      `select Id, Name from Term where Name = '${escQ(qb.invoiceTermName)}'`)).Term || [];
+    if (terms.length) patch.invoiceTermId = String(terms[0].Id);
+  }
+
+  const needPo = !!(qb.poFieldName && !qb.poFieldId);
+  const needLocation = !!(qb.locationFieldName && !qb.locationFieldId);
+  const needTicket = !!(opts.needServiceTicket && !qb.serviceTicketFieldId);
+  if (needPo || needLocation || needTicket) {
+    const seen = new Map(); // label -> DefinitionId
 
     // Companies on the classic custom-fields experience expose the labels via
     // Preferences: SalesFormsPrefs.CustomField groups hold entries named
@@ -258,10 +303,16 @@ export async function resolveInvoiceRefs(mode, accessToken, realmId, qb, opts = 
       }
     }
 
+    const lookup = (name) => {
+      const lc = (name || '').trim().toLowerCase();
+      return [...seen.entries()].find(([label]) => label.toLowerCase() === lc);
+    };
+
     // Companies migrated to QBO's NEW custom-fields experience return nothing
-    // through Preferences — but existing invoices still carry the field with
-    // its DefinitionId, so scan recent invoices for the label.
-    if (![...seen.keys()].some((k) => k.toLowerCase() === lc)) {
+    // through Preferences — but existing invoices still carry the fields with
+    // their DefinitionIds, so scan recent invoices for the labels.
+    if ((needTicket && !lookup(qb.serviceTicketFieldName || 'Service Ticket'))
+      || (needPo && !lookup(qb.poFieldName)) || (needLocation && !lookup(qb.locationFieldName))) {
       const invoices = (await query(mode, accessToken, realmId,
         'select * from Invoice orderby MetaData.LastUpdatedTime desc maxresults 30')).Invoice || [];
       for (const inv of invoices) {
@@ -273,13 +324,27 @@ export async function resolveInvoiceRefs(mode, accessToken, realmId, qb, opts = 
       }
     }
 
-    const hit = [...seen.entries()].find(([name]) => name.toLowerCase() === lc);
-    if (!hit) {
-      const have = [...seen.keys()].map((n) => `"${n}"`).join(', ');
-      throw new Error(`No custom field labelled "${label}" found on the QuickBooks invoice form${have ? ` (fields seen: ${have})` : ' (none found via Preferences or the company\'s recent invoices)'} — fix Settings > QuickBooks > Service ticket field name, type the field Id (1, 2 or 3) into Service ticket field Id directly, or clear the document's Service ticket box`);
+    // PO # and Location are best-effort: a company without them (sandbox)
+    // just gets an invoice without those fields. The Service Ticket is strict
+    // — the reviewer typed a value expecting it to land on the invoice.
+    if (needPo) {
+      const hit = lookup(qb.poFieldName);
+      if (hit) { patch.poFieldId = hit[1]; patch.poFieldName = hit[0]; }
     }
-    patch.serviceTicketFieldId = hit[1];
-    patch.serviceTicketFieldName = hit[0];
+    if (needLocation) {
+      const hit = lookup(qb.locationFieldName);
+      if (hit) { patch.locationFieldId = hit[1]; patch.locationFieldName = hit[0]; }
+    }
+    if (needTicket) {
+      const label = (qb.serviceTicketFieldName || 'Service Ticket').trim();
+      const hit = lookup(label);
+      if (!hit) {
+        const have = [...seen.keys()].map((n) => `"${n}"`).join(', ');
+        throw new Error(`No custom field labelled "${label}" found on the QuickBooks invoice form${have ? ` (fields seen: ${have})` : ' (none found via Preferences or the company\'s recent invoices)'} — fix Settings > QuickBooks > Service ticket field name, type the field Id (1, 2 or 3) into Service ticket field Id directly, or clear the document's Service ticket box`);
+      }
+      patch.serviceTicketFieldId = hit[1];
+      patch.serviceTicketFieldName = hit[0];
+    }
   }
 
   return patch;
