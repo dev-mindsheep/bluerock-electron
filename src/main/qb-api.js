@@ -110,7 +110,6 @@ export function buildBillPayload(extraction, qb) {
  */
 export function buildInvoicePayload(extraction, qb) {
   const prefix = extraction.doc_type === 'service_request' ? 'SR' : 'PR';
-  const ref = `${prefix} #${extraction.number || '?'}`;
   const serviceTicket = (extraction.service_ticket || '').trim();
   const lines = (extraction.line_items || []).map((li) => {
     const qty = li.qty > 0 ? li.qty : 1;
@@ -155,13 +154,9 @@ export function buildInvoicePayload(extraction, qb) {
     // "Message on invoice" — the standard wire-transfer instructions (falls
     // back to the KAR reference if the message is cleared in Settings).
     CustomerMemo: { value: ((qb.invoiceMessage || '').trim() || `KAR ${prefix === 'SR' ? 'Service' : 'Purchase'} Request #${extraction.number || '?'}`).slice(0, 1000) },
-    // PrivateNote maps to the statement memo — keep the cross-reference there.
-    PrivateNote: [
-      `KAR ${ref}`,
-      extraction.department ? `Dept: ${extraction.department}` : null,
-      extraction.project_site ? `Site: ${extraction.project_site}` : null,
-      serviceTicket ? `Service Ticket: ${serviceTicket}` : null,
-    ].filter(Boolean).join(' | ').slice(0, 4000),
+    // No PrivateNote: it maps to the invoice's "Message on statement", which
+    // Blue Rock wants left blank (the PR/SR cross-reference lives in the PO #
+    // custom field and on the bill's memo instead).
     CustomField: customFields.length ? customFields : undefined,
     Line: lines,
   };
