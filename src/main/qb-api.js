@@ -138,7 +138,7 @@ export function buildInvoicePayload(extraction, qb) {
   const cf = (id, name, value) => ({ DefinitionId: String(id), Name: name, Type: 'StringType', StringValue: value.slice(0, 31) });
   const customFields = [];
   if (extraction.number && qb.poFieldId) {
-    customFields.push(cf(qb.poFieldId, qb.poFieldName || 'PO #', `${prefix}-${extraction.number}`));
+    customFields.push(cf(qb.poFieldId, qb.poFieldName || 'PO #', String(extraction.number)));
   }
   if (serviceTicket && qb.serviceTicketFieldId) {
     customFields.push(cf(qb.serviceTicketFieldId, qb.serviceTicketFieldName || 'Service Ticket', serviceTicket));
