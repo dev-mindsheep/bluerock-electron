@@ -63,6 +63,7 @@ function lineMarginPct(li, qb) {
 
 /** Build the QBO Bill payload from a reviewed extraction. */
 export function buildBillPayload(extraction, qb) {
+  const serviceTicket = (extraction.service_ticket || '').trim();
   const lines = (extraction.line_items || []).map((li) => {
     const prefix = (li.sage_code || '').split('-')[0];
     const accountId = qb.accountMap?.[prefix] || qb.defaultAccountId || '';
@@ -92,6 +93,7 @@ export function buildBillPayload(extraction, qb) {
       extraction.department ? `Dept: ${extraction.department}` : null,
       extraction.project_site ? `Site: ${extraction.project_site}` : null,
       extraction.requester_name ? `Requester: ${extraction.requester_name}` : null,
+      serviceTicket ? `Service Ticket: ${serviceTicket}` : null,
       extraction.note ? `Note: ${extraction.note}` : null,
     ].filter(Boolean).join(' | ').slice(0, 4000),
     Line: lines,
