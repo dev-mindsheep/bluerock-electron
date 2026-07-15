@@ -73,6 +73,12 @@ export const DEFAULTS = {
     customerName: 'KAR',
     invoiceItemId: '',
     invoiceItemName: 'KAR Procurement',
+    // Blue Rock's invoice form carries a "Service Ticket" custom field (e.g.
+    // ST01236 on Invoice 3055). The reviewer types the value per document on
+    // the review screen; the field's QBO DefinitionId (1-3, classic custom
+    // fields) resolves from this label on the first push that uses it.
+    serviceTicketFieldName: 'Service Ticket',
+    serviceTicketFieldId: '',
     tokens: null, // { access_token, refresh_token, expires_at, realmId }
   },
   drive: {

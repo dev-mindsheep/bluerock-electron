@@ -45,7 +45,7 @@ export async function pushToQuickBooks(doc, settings) {
     fs.writeFileSync(file, JSON.stringify({ createdAt: new Date().toISOString(), payload }, null, 2));
     let invoiceId = null;
     if (qb.createInvoice) {
-      const invoicePayload = buildInvoicePayload(doc.extraction, { ...qb, customerId: qb.customerId || 'MOCK', invoiceItemId: qb.invoiceItemId || 'MOCK' });
+      const invoicePayload = buildInvoicePayload(doc.extraction, { ...qb, customerId: qb.customerId || 'MOCK', invoiceItemId: qb.invoiceItemId || 'MOCK', serviceTicketFieldId: qb.serviceTicketFieldId || 'MOCK' });
       fs.writeFileSync(path.join(dir, `${payload.DocNumber || doc.id}-invoice.json`),
         JSON.stringify({ createdAt: new Date().toISOString(), payload: invoicePayload }, null, 2));
       invoiceId = `MOCK-INV-${payload.DocNumber || doc.id}`;
@@ -63,7 +63,8 @@ export async function pushToQuickBooks(doc, settings) {
   // bill behind with no invoice. Resolved Ids persist for later pushes.
   let invoiceQb = null;
   if (qb.createInvoice) {
-    const refsPatch = await resolveInvoiceRefs(qb.mode, accessToken, realmId, qb);
+    const refsPatch = await resolveInvoiceRefs(qb.mode, accessToken, realmId, qb,
+      { needServiceTicket: !!(doc.extraction.service_ticket || '').trim() });
     if (Object.keys(refsPatch).length) saveSettings({ qb: refsPatch });
     invoiceQb = { ...qb, ...refsPatch };
   }

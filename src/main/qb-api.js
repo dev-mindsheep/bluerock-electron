@@ -106,6 +106,7 @@ export function buildBillPayload(extraction, qb) {
  */
 export function buildInvoicePayload(extraction, qb) {
   const ref = `${extraction.doc_type === 'service_request' ? 'SR' : 'PR'} #${extraction.number || '?'}`;
+  const serviceTicket = (extraction.service_ticket || '').trim();
   const lines = (extraction.line_items || []).map((li) => {
     const qty = li.qty > 0 ? li.qty : 1;
     const unitPrice = round2((li.unit_cost || 0) * (1 + lineMarginPct(li, qb) / 100));
@@ -134,7 +135,17 @@ export function buildInvoicePayload(extraction, qb) {
       `KAR ${ref}`,
       extraction.department ? `Dept: ${extraction.department}` : null,
       extraction.project_site ? `Site: ${extraction.project_site}` : null,
+      serviceTicket ? `Service Ticket: ${serviceTicket}` : null,
     ].filter(Boolean).join(' | ').slice(0, 4000),
+    // Blue Rock's invoice form carries a "Service Ticket" custom field
+    // (classic sales custom field, DefinitionId 1-3, resolved by label in
+    // resolveInvoiceRefs). QBO caps custom field values at 31 characters.
+    CustomField: serviceTicket && qb.serviceTicketFieldId ? [{
+      DefinitionId: String(qb.serviceTicketFieldId),
+      Name: qb.serviceTicketFieldName || 'Service Ticket',
+      Type: 'StringType',
+      StringValue: serviceTicket.slice(0, 31),
+    }] : undefined,
     Line: lines,
   };
 }
@@ -185,8 +196,14 @@ const escQ = (s) => String(s).replace(/'/g, "\\'");
  * on the company's first income account if it doesn't exist yet). Returns a
  * partial qb-settings patch with the resolved Ids, or throws with a message
  * that tells the user exactly which Settings field to fix.
+ *
+ * When the document carries a Service Ticket value (opts.needServiceTicket),
+ * also resolve which of the company's classic sales custom fields (DefinitionId
+ * 1-3) is labelled serviceTicketFieldName, from Preferences.SalesFormsPrefs.
+ * Only resolved when actually needed, so pushes without a ticket never fail on
+ * a company whose invoice form lacks the field.
  */
-export async function resolveInvoiceRefs(mode, accessToken, realmId, qb) {
+export async function resolveInvoiceRefs(mode, accessToken, realmId, qb, opts = {}) {
   const patch = {};
 
   if (!qb.customerId) {
@@ -220,6 +237,26 @@ export async function resolveInvoiceRefs(mode, accessToken, realmId, qb) {
       patch.invoiceItemId = String(created.Item?.Id);
     }
     patch.invoiceItemName = itemName;
+  }
+
+  if (opts.needServiceTicket && !qb.serviceTicketFieldId) {
+    const label = (qb.serviceTicketFieldName || 'Service Ticket').trim();
+    const prefs = await qbGet(mode, accessToken, `/v3/company/${realmId}/preferences?minorversion=75`);
+    // SalesFormsPrefs.CustomField is an array of groups, each holding entries
+    // named SalesFormsPrefs.SalesCustomName1..3 (the labels) — the trailing
+    // digit is the DefinitionId invoices reference.
+    const groups = prefs?.Preferences?.SalesFormsPrefs?.CustomField || [];
+    const entries = groups.flatMap((g) => g.CustomField || []);
+    const match = entries.find((f) => /^SalesFormsPrefs\.SalesCustomName\d$/.test(f.Name || '')
+      && (f.StringValue || '').trim().toLowerCase() === label.toLowerCase());
+    if (!match) {
+      const have = entries
+        .filter((f) => /^SalesFormsPrefs\.SalesCustomName\d$/.test(f.Name || '') && f.StringValue)
+        .map((f) => `"${f.StringValue}"`).join(', ');
+      throw new Error(`No custom field labelled "${label}" on the QuickBooks sales forms${have ? ` (company has: ${have})` : ''} — fix Settings > QuickBooks > Service ticket field name, or clear the document's Service ticket box`);
+    }
+    patch.serviceTicketFieldId = match.Name.slice(-1);
+    patch.serviceTicketFieldName = match.StringValue.trim();
   }
 
   return patch;

@@ -218,6 +218,7 @@ async function renderReview(docArg) {
           </div>
           ${fieldHtml('Priority', 'priority', ex.priority, { warn: low.has('priority') })}
           ${fieldHtml('Purchase type', 'purchase_type', ex.purchase_type, { warn: low.has('purchase_type') })}
+          ${invoicing ? fieldHtml('Service ticket (goes on the KAR invoice)', 'service_ticket', ex.service_ticket) : ''}
         </div>
         <div class="field ${low.has('note') ? 'warn' : ''}" style="margin-top:10px">
           <label>Note</label>
@@ -455,7 +456,7 @@ async function renderSettings() {
           ${sInput('Production redirect URI (registered HTTPS callback page)', 'qb.productionRedirectUri', s.qb.productionRedirectUri)}
         </div>
         <div class="section-title">KAR invoice (accounts receivable)</div>
-        <div class="hint">When enabled, each push also creates the invoice to KAR: line price = unit cost × (1 + margin %). Every line then needs a unit cost on the review screen. The customer name must match Blue Rock's QBO customer record for KAR — its Id resolves on the first push. Invoice lines use a Product/Service item, created automatically if the company doesn't have one by that name.</div>
+        <div class="hint">When enabled, each push also creates the invoice to KAR: line price = unit cost × (1 + margin %). Every line then needs a unit cost on the review screen. The customer name must match Blue Rock's QBO customer record for KAR — its Id resolves on the first push. Invoice lines use a Product/Service item, created automatically if the company doesn't have one by that name. A Service ticket typed on the review screen lands in the matching custom field on the invoice form (field name must match the label in QuickBooks; its Id resolves on the first push that uses it).</div>
         <div class="inline" style="margin-bottom:10px">
           <label><input type="checkbox" data-s="qb.createInvoice" ${s.qb.createInvoice ? 'checked' : ''}/> Create KAR invoice on push</label>
         </div>
@@ -465,6 +466,8 @@ async function renderSettings() {
           ${sInput('Invoice customer Id (auto-resolves from the name)', 'qb.customerId', s.qb.customerId)}
           ${sInput('Invoice item name (Product/Service)', 'qb.invoiceItemName', s.qb.invoiceItemName)}
           ${sInput('Invoice item Id (auto-resolves / auto-creates)', 'qb.invoiceItemId', s.qb.invoiceItemId)}
+          ${sInput('Service ticket field name (custom field on the invoice form)', 'qb.serviceTicketFieldName', s.qb.serviceTicketFieldName)}
+          ${sInput('Service ticket field Id (auto-resolves from the name)', 'qb.serviceTicketFieldId', s.qb.serviceTicketFieldId)}
         </div>
         <div class="section-title">Sage prefix → QBO account Id</div>
         <div class="grid2">
