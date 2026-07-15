@@ -148,6 +148,11 @@ async function getAccessToken(qb) {
   return tokens.access_token;
 }
 
+// The loopback listener from an abandoned connect attempt (browser closed,
+// Intuit errored before redirecting) would otherwise hold the port for the
+// full 5-minute timeout and make an immediate retry fail with EADDRINUSE.
+let pendingOauthServer = null;
+
 /**
  * Start the OAuth connect flow.
  * Sandbox: full loopback flow on http://localhost:<port>/callback.
@@ -155,6 +160,10 @@ async function getAccessToken(qb) {
  * configured redirect and the user pastes back code+realmId via finishConnectManual().
  */
 export async function startConnect() {
+  if (pendingOauthServer) {
+    try { pendingOauthServer.close(); } catch { /* already closed */ }
+    pendingOauthServer = null;
+  }
   const settings = getSettings();
   const qb = settings.qb;
   // Defensive trim — older saved settings may carry pasted whitespace.
@@ -199,16 +208,19 @@ export async function startConnect() {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<h2>Connected to QuickBooks.</h2>You can close this tab and return to the app.');
         server.close();
+        pendingOauthServer = null;
         resolve({ connected: true, realmId });
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'text/plain' }).end('OAuth error: ' + err.message);
         server.close();
+        pendingOauthServer = null;
         reject(err);
       }
     });
     server.on('error', reject);
     server.listen(port, '127.0.0.1', () => shell.openExternal(authUrl));
-    setTimeout(() => { try { server.close(); } catch {} reject(new Error('OAuth timed out after 5 minutes')); }, 5 * 60_000).unref();
+    pendingOauthServer = server;
+    setTimeout(() => { try { server.close(); } catch {} if (pendingOauthServer === server) pendingOauthServer = null; reject(new Error('OAuth timed out after 5 minutes')); }, 5 * 60_000).unref();
   });
 }
 
