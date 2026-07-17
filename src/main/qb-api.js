@@ -44,8 +44,11 @@ export const DEFAULT_ACCOUNT_NAME = 'Purchase - Misc';
 
 // Sage prefix -> QBO INCOME account NAME, for the Service items that appear in
 // the invoice's Product/Service column (docs/System Code (1).xlsx, received
-// 2026-07-17). ITDE and TOEQ are absent from the sheet; assumed to follow the
-// expense-side pattern (IT / Misc) pending Alan's confirmation.
+// 2026-07-17). Names verified against the company's CoA export: their "MIsc"
+// typo is caught by the case-insensitive match, and the sheet's "Stationary"
+// is corrected to the real account name "Stationery". ITDE and TOEQ are
+// absent from the sheet; assumed to follow the expense-side pattern
+// (IT / Misc) pending Alan's confirmation.
 export const SAGE_INCOME_ACCOUNT_NAMES = {
   CHEM: 'Misc',
   CIVL: 'Civil Work',
@@ -61,7 +64,7 @@ export const SAGE_INCOME_ACCOUNT_NAMES = {
   OFSU: 'Misc',
   SAFE: 'Technical & HSE',
   SRVC: 'Misc',
-  STAT: 'Stationary',
+  STAT: 'Stationery',
   TOEQ: 'Misc',
   TOOL: 'Misc',
 };
