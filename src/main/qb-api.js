@@ -42,6 +42,32 @@ export const SAGE_ACCOUNT_NAMES = {
 
 export const DEFAULT_ACCOUNT_NAME = 'Purchase - Misc';
 
+// Sage prefix -> QBO INCOME account NAME, for the Service items that appear in
+// the invoice's Product/Service column (docs/System Code (1).xlsx, received
+// 2026-07-17). ITDE and TOEQ are absent from the sheet; assumed to follow the
+// expense-side pattern (IT / Misc) pending Alan's confirmation.
+export const SAGE_INCOME_ACCOUNT_NAMES = {
+  CHEM: 'Misc',
+  CIVL: 'Civil Work',
+  ELEC: 'Electrical',
+  FIRE: 'Misc',
+  FURN: 'Furniture',
+  INST: 'Misc',
+  IT: 'IT',
+  ITDE: 'IT',
+  LABO: 'Misc',
+  MECH: 'Misc',
+  MEDI: 'Technical & HSE',
+  OFSU: 'Misc',
+  SAFE: 'Technical & HSE',
+  SRVC: 'Misc',
+  STAT: 'Stationary',
+  TOEQ: 'Misc',
+  TOOL: 'Misc',
+};
+
+export const DEFAULT_INCOME_ACCOUNT_NAME = 'Misc';
+
 // Blue Rock's books already contain a vendor literally named UNKNOWN, used as
 // the placeholder when the market supplier can't be identified (handwritten
 // invoices). Bills default to it; the team reassigns the real supplier in QBO.
@@ -202,7 +228,8 @@ const escQ = (s) => String(s).replace(/'/g, "\\'");
  * Resolve what the Invoice payload needs: the KAR customer Id (looked up from
  * customerName when the Id isn't set) and the Product/Service item invoice
  * lines must reference (looked up by invoiceItemName; created as a Service item
- * on the company's first income account if it doesn't exist yet). Returns a
+ * on the income account mapped to its Sage prefix if it doesn't exist yet).
+ * Returns a
  * partial qb-settings patch with the resolved Ids, or throws with a message
  * that tells the user exactly which Settings field to fix.
  *
@@ -226,22 +253,28 @@ export async function resolveInvoiceRefs(mode, accessToken, realmId, qb, opts = 
     patch.customerName = customers[0].DisplayName;
   }
 
-  // Service items are created on the company's first income account; look it
-  // up once per resolve, only when something actually needs creating.
-  let incomeAccountId = null;
-  const firstIncomeAccount = async () => {
-    if (incomeAccountId) return incomeAccountId;
-    const income = (await query(mode, accessToken, realmId,
-      "select Id, Name from Account where AccountType = 'Income' maxresults 1")).Account || [];
-    if (!income.length) throw new Error('Could not create an invoice item: the company has no income account');
-    incomeAccountId = String(income[0].Id);
-    return incomeAccountId;
+  // Service items land on the income account mapped to their Sage prefix
+  // (SAGE_INCOME_ACCOUNT_NAMES); an unmapped prefix or a missing account name
+  // falls back to the company's first income account, best-effort — the income
+  // account is fixable on the item in QBO, not worth failing the push over.
+  // Fetched once per resolve, only when something actually needs creating.
+  let incomeAccounts = null;
+  const incomeAccountFor = async (sageCode) => {
+    if (!incomeAccounts) {
+      incomeAccounts = (await query(mode, accessToken, realmId,
+        "select Id, Name from Account where AccountType = 'Income' maxresults 1000")).Account || [];
+      if (!incomeAccounts.length) throw new Error('Could not create an invoice item: the company has no income account');
+    }
+    const prefix = String(sageCode || '').split('-')[0];
+    const wanted = (SAGE_INCOME_ACCOUNT_NAMES[prefix] || DEFAULT_INCOME_ACCOUNT_NAME).toLowerCase();
+    const hit = incomeAccounts.find((a) => (a.Name || '').trim().toLowerCase() === wanted);
+    return String((hit || incomeAccounts[0]).Id);
   };
-  const createServiceItem = async (name) => {
+  const createServiceItem = async (name, sageCode) => {
     const created = await qbPost(mode, accessToken, realmId, 'item', {
       Name: name,
       Type: 'Service',
-      IncomeAccountRef: { value: await firstIncomeAccount() },
+      IncomeAccountRef: { value: await incomeAccountFor(sageCode) },
     });
     return String(created.Item?.Id);
   };
@@ -264,7 +297,7 @@ export async function resolveInvoiceRefs(mode, accessToken, realmId, qb, opts = 
       `select Id, Name from Item where Name in (${nameList})`)).Item || [];
     for (const it of found) itemMap[it.Name] = String(it.Id);
     for (const code of newCodes) {
-      if (!itemMap[code]) itemMap[code] = await createServiceItem(code);
+      if (!itemMap[code]) itemMap[code] = await createServiceItem(code, code);
     }
     patch.itemMap = itemMap; // deep-merged into the existing cache on save
   }
