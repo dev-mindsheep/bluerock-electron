@@ -4,13 +4,25 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const state = {
-  view: 'queue',       // 'queue' | 'review' | 'settings'
+  view: 'queue',       // 'queue' | 'archive' | 'review' | 'settings'
+  backView: 'queue',   // list view to return to from review
   docs: [],
   settings: null,
   selectedId: null,
   fileUrl: null,
   busy: false,
 };
+
+// Pushed documents move from the Queue to the Archive tab 10 days after the
+// push, so the working queue stays short while history stays reachable.
+const ARCHIVE_AFTER_DAYS = 10;
+const isArchived = (d) =>
+  d.status === 'pushed' && d.qb?.pushedAt &&
+  Date.now() - new Date(d.qb.pushedAt).getTime() > ARCHIVE_AFTER_DAYS * 86_400_000;
+
+// Queue lines are titled by the order's Service Ticket when one has been
+// entered (Blue Rock tracks orders by ST number); otherwise by file name.
+const docTitle = (d) => (d.extraction?.service_ticket || '').trim() || d.fileName;
 
 const STATUS_LABEL = {
   new: 'New', extracting: 'Extracting…', extracted: 'Ready for review',
@@ -43,6 +55,7 @@ async function withSpinner(btn, label, fn) {
 async function refreshDocs() {
   state.docs = await window.api.docs.list();
   if (state.view === 'queue') renderQueue();
+  else if (state.view === 'archive') renderArchive();
 }
 window.api.onDocsChanged(() => refreshDocs());
 
@@ -58,6 +71,7 @@ $$('.nav-btn').forEach((b) =>
 
 function render() {
   if (state.view === 'queue') renderQueue();
+  else if (state.view === 'archive') renderArchive();
   else if (state.view === 'review') renderReview();
   else renderSettings();
 }
@@ -98,27 +112,56 @@ function renderQueue() {
   };
 
   const list = $('#doc-list');
-  if (!state.docs.length) {
-    list.innerHTML = '<div class="empty">No documents yet. Drop files above or configure email intake in Settings.</div>';
+  const docs = state.docs.filter((d) => !isArchived(d));
+  if (!docs.length) {
+    list.innerHTML = '<div class="empty">No documents in the queue. Drop files above or configure email intake in Settings.</div>';
     return;
   }
-  list.innerHTML = state.docs.map((d) => {
-    const icon = d.mime === 'application/pdf' ? '📄' : '🖼️';
-    const src = d.source === 'email' ? `✉️ ${esc(d.meta?.from || 'email')} — ${esc(d.meta?.subject || '')}` : 'Dropped file';
-    const num = d.extraction?.number ? ` · ${d.extraction.doc_type === 'service_request' ? 'SR' : 'PR'} #${esc(d.extraction.number)}` : '';
-    return `
-      <div class="doc-row" data-id="${d.id}">
-        <div class="doc-icon">${icon}</div>
-        <div class="doc-main">
-          <div class="doc-title">${esc(d.fileName)}${num}</div>
-          <div class="doc-sub">${src} · ${new Date(d.createdAt).toLocaleString()}${d.error ? ` · <span style="color:var(--red)">${esc(d.error)}</span>` : ''}</div>
-        </div>
-        <span class="pill ${d.status}">${STATUS_LABEL[d.status] || d.status}</span>
-      </div>`;
-  }).join('');
-  $$('.doc-row', list).forEach((row) =>
+  renderDocList(list, docs);
+}
+
+function docRowHtml(d) {
+  const icon = d.mime === 'application/pdf' ? '📄' : '🖼️';
+  const src = d.source === 'email' ? `✉️ ${esc(d.meta?.from || 'email')} — ${esc(d.meta?.subject || '')}` : 'Dropped file';
+  const num = d.extraction?.number ? ` · ${d.extraction.doc_type === 'service_request' ? 'SR' : 'PR'} #${esc(d.extraction.number)}` : '';
+  const title = docTitle(d);
+  const fileNote = title === d.fileName ? '' : `${esc(d.fileName)} · `;
+  return `
+    <div class="doc-row" data-id="${d.id}">
+      <div class="doc-icon">${icon}</div>
+      <div class="doc-main">
+        <div class="doc-title">${esc(title)}${num}</div>
+        <div class="doc-sub">${fileNote}${src} · ${new Date(d.createdAt).toLocaleString()}${d.error ? ` · <span style="color:var(--red)">${esc(d.error)}</span>` : ''}</div>
+      </div>
+      <span class="pill ${d.status}">${STATUS_LABEL[d.status] || d.status}</span>
+    </div>`;
+}
+
+function renderDocList(container, docs) {
+  container.innerHTML = docs.map(docRowHtml).join('');
+  $$('.doc-row', container).forEach((row) =>
     row.addEventListener('click', () => openReview(row.dataset.id))
   );
+}
+
+// ============================================================ ARCHIVE
+function renderArchive() {
+  const main = $('#main');
+  main.innerHTML = `
+    <div class="toolbar">
+      <h1>Archive</h1>
+    </div>
+    <div class="scroll">
+      <div class="meta-line" style="margin-bottom:12px">Documents pushed to QuickBooks move here ${ARCHIVE_AFTER_DAYS} days after the push. Archiving only tidies the app — nothing changes in QuickBooks or on Drive.</div>
+      <div id="doc-list"></div>
+    </div>`;
+  const docs = state.docs.filter(isArchived);
+  const list = $('#doc-list');
+  if (!docs.length) {
+    list.innerHTML = '<div class="empty">Nothing archived yet. Pushed documents appear here after ' + ARCHIVE_AFTER_DAYS + ' days.</div>';
+    return;
+  }
+  renderDocList(list, docs);
 }
 
 async function pickFiles() {
@@ -130,6 +173,7 @@ async function pickFiles() {
 // ============================================================ REVIEW
 async function openReview(id) {
   state.selectedId = id;
+  state.backView = state.view === 'archive' ? 'archive' : 'queue';
   state.view = 'review';
   state.fileUrl = await window.api.docs.fileUrl(id);
   let doc = await window.api.docs.get(id);
@@ -272,7 +316,7 @@ async function renderReview(docArg) {
       <button class="btn danger" id="btn-delete">Delete</button>
     </div>`;
 
-  $('#btn-back').onclick = () => { state.view = 'queue'; render(); };
+  $('#btn-back').onclick = () => { state.view = state.backView; render(); };
   $('#btn-reextract').onclick = () => extractNow(doc.id);
 
   const vendorSel = $('#vendor-select');
@@ -352,9 +396,9 @@ async function renderReview(docArg) {
   $('#btn-flag').onclick = async () => { await save(); await window.api.docs.setStatus(doc.id, 'flagged'); state.view = 'queue'; render(); };
   $('#btn-skip').onclick = async () => { await save(); await window.api.docs.setStatus(doc.id, 'skipped'); state.view = 'queue'; render(); };
   $('#btn-delete').onclick = async () => {
-    if (!confirm('Delete this document from the queue?')) return;
+    if (!confirm('Delete this document from the app? Anything already pushed stays in QuickBooks.')) return;
     await window.api.docs.remove(doc.id);
-    state.view = 'queue'; render();
+    state.view = state.backView; render();
   };
   $('#btn-approve').onclick = (e) => withSpinner(e.currentTarget, 'Pushing to QuickBooks…', async () => {
     state.busy = true;
@@ -500,7 +544,7 @@ async function renderSettings() {
 
       <div class="settings-card">
         <h2>Google Drive archive <span class="badge ${drSt.connected ? 'on' : 'off'}">${drSt.connected ? 'connected' : 'not connected'}</span></h2>
-        <div class="hint">Optional. When enabled, the original document + extracted JSON are filed to Drive under /KAR/[Department]/[Year-Month]/ after each push. The app works fully without it — nothing is stored in the cloud unless you turn this on. Requires a Google Cloud OAuth "Desktop app" client with the consent screen published to Production.</div>
+        <div class="hint">Optional. When enabled, the original document + extracted JSON are filed to Drive after each push under /KAR/[Service Ticket]/ (orders without an ST number fall back to /KAR/[Department]/[Year-Month]/). The app works fully without it — nothing is stored in the cloud unless you turn this on. Requires a Google Cloud OAuth "Desktop app" client with the consent screen published to Production.</div>
         <div class="inline" style="margin-bottom:10px">
           <label><input type="checkbox" data-s="drive.enabled" ${s.drive.enabled ? 'checked' : ''}/> Enable Drive archival</label>
         </div>

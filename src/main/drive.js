@@ -146,25 +146,35 @@ function multipartBody(metadata, mime, buffer) {
 
 /**
  * Archive a processed document: original file + extraction JSON under
- * /<root>/<Department>/<YYYY-MM>/<PR-number>.<ext>
+ * /<root>/<Service Ticket>/ when the order has an ST number (Blue Rock files
+ * orders by ST), else /<root>/<Department>/<YYYY-MM>/.
  */
 export async function archiveToDrive(doc, settings) {
   const drive = settings.drive;
   const ex = doc.extraction || {};
-  const dept = (ex.department || 'Unsorted').replace(/[\\/:*?"<>|]/g, '-');
-  const iso = (ex.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
-  const yearMonth = iso ? `${iso[3]}-${iso[2]}` : new Date().toISOString().slice(0, 7);
   const baseName = ex.number
     ? `${ex.doc_type === 'service_request' ? 'SR' : 'PR'}-${ex.number}`
     : doc.fileName.replace(/\.[^.]+$/, '');
 
   const rootId = await ensureFolder(drive.rootFolderName || 'KAR', null);
-  const deptId = await ensureFolder(dept, rootId);
-  const monthId = await ensureFolder(yearMonth, deptId);
+  const st = (ex.service_ticket || '').trim().replace(/[\\/:*?"<>|]/g, '-');
+  let parentId;
+  let subPath;
+  if (st) {
+    parentId = await ensureFolder(st, rootId);
+    subPath = st;
+  } else {
+    const dept = (ex.department || 'Unsorted').replace(/[\\/:*?"<>|]/g, '-');
+    const iso = (ex.date || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    const yearMonth = iso ? `${iso[3]}-${iso[2]}` : new Date().toISOString().slice(0, 7);
+    const deptId = await ensureFolder(dept, rootId);
+    parentId = await ensureFolder(yearMonth, deptId);
+    subPath = `${dept}/${yearMonth}`;
+  }
 
   const ext = doc.fileName.includes('.') ? doc.fileName.slice(doc.fileName.lastIndexOf('.')) : '';
   const fileBuf = fs.readFileSync(doc.filePath);
-  const up1 = multipartBody({ name: baseName + ext, parents: [monthId] }, doc.mime, fileBuf);
+  const up1 = multipartBody({ name: baseName + ext, parents: [parentId] }, doc.mime, fileBuf);
   const f1 = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
     method: 'POST',
     headers: { 'Content-Type': `multipart/related; boundary=${up1.boundary}` },
@@ -172,14 +182,14 @@ export async function archiveToDrive(doc, settings) {
   });
 
   const jsonBuf = Buffer.from(JSON.stringify(ex, null, 2));
-  const up2 = multipartBody({ name: baseName + '.json', parents: [monthId] }, 'application/json', jsonBuf);
+  const up2 = multipartBody({ name: baseName + '.json', parents: [parentId] }, 'application/json', jsonBuf);
   await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
     method: 'POST',
     headers: { 'Content-Type': `multipart/related; boundary=${up2.boundary}` },
     body: up2.body,
   });
 
-  return { fileId: f1.id, link: f1.webViewLink, path: `${drive.rootFolderName || 'KAR'}/${dept}/${yearMonth}/${baseName}${ext}` };
+  return { fileId: f1.id, link: f1.webViewLink, path: `${drive.rootFolderName || 'KAR'}/${subPath}/${baseName}${ext}` };
 }
 
 export function driveStatus() {

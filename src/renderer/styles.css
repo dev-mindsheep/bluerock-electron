@@ -1,8 +1,9 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* Light theme (per Blue Rock's request, v0.2.7 — previously dark). */
 :root {
-  --bg: #12161c; --panel: #1a2029; --panel2: #202835; --border: #2c3644;
-  --text: #e6ebf2; --muted: #8b98a8; --accent: #3b82f6; --accent2: #2563eb;
-  --green: #22c55e; --red: #ef4444; --amber: #f59e0b;
+  --bg: #f3f5f8; --panel: #ffffff; --panel2: #e9edf2; --border: #d7dee7;
+  --text: #1c2733; --muted: #5b6a7c; --accent: #2563eb; --accent2: #1d4ed8;
+  --green: #15803d; --red: #dc2626; --amber: #b45309;
 }
 html, body, #app { height: 100%; }
 body {
@@ -21,6 +22,7 @@ body {
 .brand-mark {
   width: 36px; height: 36px; border-radius: 8px; background: var(--accent);
   display: flex; align-items: center; justify-content: center; font-weight: 700;
+  color: #fff;
 }
 .brand-name { font-weight: 700; }
 .brand-sub { color: var(--muted); font-size: 12px; }
@@ -48,10 +50,10 @@ button.btn {
   padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
 }
 button.btn:hover { border-color: var(--accent); }
-button.btn.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 button.btn.primary:hover { background: var(--accent2); }
 button.btn.danger { border-color: var(--red); color: var(--red); }
-button.btn.green { background: var(--green); border-color: var(--green); color: #08240f; font-weight: 700; }
+button.btn.green { background: var(--green); border-color: var(--green); color: #fff; font-weight: 700; }
 button.btn:disabled { opacity: 0.5; cursor: default; }
 
 /* drop zone + queue */
@@ -84,7 +86,7 @@ button.btn:disabled { opacity: 0.5; cursor: default; }
 
 /* review */
 .review { display: flex; height: 100%; overflow: hidden; }
-.review-left { flex: 1; min-width: 320px; border-right: 1px solid var(--border); background: #0c0f13; }
+.review-left { flex: 1; min-width: 320px; border-right: 1px solid var(--border); background: #dde3ea; }
 .review-left iframe, .review-left img { width: 100%; height: 100%; border: 0; object-fit: contain; }
 .review-right { flex: 1; min-width: 380px; overflow-y: auto; padding: 16px 18px 60px; }
 .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 18px 0 8px; }
