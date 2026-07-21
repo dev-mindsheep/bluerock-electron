@@ -90,10 +90,50 @@ function lineMarginPct(li, qb) {
   return Number.isFinite(Number(m)) ? Number(m) : 0;
 }
 
-/** Build the QBO Bill payload from a reviewed extraction. */
-export function buildBillPayload(extraction, qb) {
+/** PR-/SR-prefixed bill number from the extracted request number. */
+export function billDocNumber(extraction) {
+  return extraction.number ? `${extraction.doc_type === 'service_request' ? 'SR' : 'PR'}-${extraction.number}` : undefined;
+}
+
+/**
+ * Group line items by their effective supplier: the line's own supplier when
+ * the reviewer picked one in the items table, else the document's default
+ * vendor, else the placeholder vendor. One QBO Bill is created per group —
+ * a KAR request arrives as one document but its items can be payable to
+ * different market suppliers. Groups keep first-appearance order; the first
+ * keeps the plain PR/SR number and later ones get a -2/-3… suffix.
+ */
+export function groupLinesByVendor(extraction, doc, qb) {
+  const defaultId = String(doc.vendorId || qb.vendorId || '');
+  const defaultName = (doc.vendorId ? doc.vendorName : qb.vendorName) || '';
+  const groups = [];
+  const byId = new Map();
+  for (const li of extraction.line_items || []) {
+    const own = li.vendor_id ? String(li.vendor_id) : '';
+    const vendorId = own || defaultId;
+    let g = byId.get(vendorId);
+    if (!g) {
+      g = { vendorId, vendorName: own ? li.vendor_name || '' : defaultName, lines: [] };
+      byId.set(vendorId, g);
+      groups.push(g);
+    }
+    g.lines.push(li);
+  }
+  if (!groups.length) groups.push({ vendorId: defaultId, vendorName: defaultName, lines: [] });
+  const base = billDocNumber(extraction);
+  groups.forEach((g, i) => { g.docNumber = base ? (i ? `${base}-${i + 1}` : base) : undefined; });
+  return groups;
+}
+
+/**
+ * Build the QBO Bill payload from a reviewed extraction. With a `group` (from
+ * groupLinesByVendor) the bill covers only that supplier's lines and carries
+ * the group's vendor + doc number; without one it covers every line with the
+ * settings' default vendor (legacy single-bill shape, kept for headless tests).
+ */
+export function buildBillPayload(extraction, qb, group = null) {
   const serviceTicket = (extraction.service_ticket || '').trim();
-  const lines = (extraction.line_items || []).map((li) => {
+  const lines = (group ? group.lines : extraction.line_items || []).map((li) => {
     const prefix = (li.sage_code || '').split('-')[0];
     const accountId = qb.accountMap?.[prefix] || qb.defaultAccountId || '';
     return {
@@ -114,9 +154,11 @@ export function buildBillPayload(extraction, qb) {
   });
 
   return {
-    VendorRef: { value: String(qb.vendorId || ''), name: qb.vendorName || undefined },
+    VendorRef: group
+      ? { value: String(group.vendorId), name: group.vendorName || undefined }
+      : { value: String(qb.vendorId || ''), name: qb.vendorName || undefined },
     TxnDate: toIsoDate(extraction.date),
-    DocNumber: extraction.number ? `${extraction.doc_type === 'service_request' ? 'SR' : 'PR'}-${extraction.number}` : undefined,
+    DocNumber: group ? group.docNumber : billDocNumber(extraction),
     // Memo carries only the Service Ticket value, for cross-referencing with
     // the KAR invoice (Blue Rock's request, 2026-07-15) — the PR/SR reference
     // is already the bill number, and dept/site/requester live on the

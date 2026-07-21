@@ -185,8 +185,12 @@ handle('qb:push', async (id) => {
   if (!doc?.extraction) throw new Error('Document has no reviewed extraction');
   const settings = getSettings();
   const result = await pushToQuickBooks(doc, settings);
+  // A multi-supplier push can partially fail (some bills created, some not).
+  // The document then stays re-pushable: the next push retries only the
+  // missing bills, and archival waits for the full set.
+  const complete = !(result.billErrors || []).length;
   let driveFile = doc.driveFile;
-  if (settings.drive.enabled && settings.drive.tokens?.refresh_token) {
+  if (complete && settings.drive.enabled && settings.drive.tokens?.refresh_token) {
     try {
       driveFile = await archiveToDrive(doc, settings);
     } catch (err) {
@@ -194,8 +198,10 @@ handle('qb:push', async (id) => {
     }
   }
   const updated = store.updateDocument(id, {
-    status: 'pushed',
-    qb: { ...result, pushedAt: new Date().toISOString() },
+    status: complete ? 'pushed' : 'extracted',
+    error: complete ? null
+      : `${result.billErrors.length} of ${result.bills.length + result.billErrors.length} bills failed — open the document and push again to retry the failed ones`,
+    qb: { ...result, pushedAt: complete ? new Date().toISOString() : doc.qb?.pushedAt || null },
     driveFile,
   });
   notifyDocsChanged();

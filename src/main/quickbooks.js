@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getSettings, saveSettings } from './settings.js';
-import { apiBase, buildBillPayload, buildInvoicePayload, listVendors, nextInvoiceNumber, qbPost, resolveCompanyIds, resolveInvoiceRefs, uploadAttachment } from './qb-api.js';
+import { buildBillPayload, buildInvoicePayload, groupLinesByVendor, listVendors, nextInvoiceNumber, qbPost, resolveCompanyIds, resolveInvoiceRefs, uploadAttachment } from './qb-api.js';
 
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
@@ -20,11 +20,9 @@ export { buildBillPayload } from './qb-api.js';
 /** Push a reviewed document to QuickBooks (or the mock outbox). */
 export async function pushToQuickBooks(doc, settings) {
   const qb = settings.qb;
-  const payload = buildBillPayload(doc.extraction, qb);
-  // Reviewer-chosen vendor on this document overrides the placeholder default.
-  if (doc.vendorId) {
-    payload.VendorRef = { value: String(doc.vendorId), name: doc.vendorName || undefined };
-  }
+  // One bill per supplier: lines whose supplier was picked in the items table
+  // split away from the document's default-supplier bill.
+  const groups = groupLinesByVendor(doc.extraction, doc, qb);
 
   // Fail before anything is created: an invoice without a unit cost on every
   // line would bill KAR wrong numbers, so the reviewer must finish pricing
@@ -41,19 +39,25 @@ export async function pushToQuickBooks(doc, settings) {
   if (qb.mode === 'mock') {
     const dir = path.join(app.getPath('userData'), 'qb-outbox');
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `${payload.DocNumber || doc.id}.json`);
-    fs.writeFileSync(file, JSON.stringify({ createdAt: new Date().toISOString(), payload }, null, 2));
+    const stamp = new Date().toISOString();
+    const bills = groups.map((g, i) => {
+      const payload = buildBillPayload(doc.extraction, qb, g);
+      const key = payload.DocNumber || `${doc.id}${i ? `-${i + 1}` : ''}`;
+      const file = path.join(dir, `${key}.json`);
+      fs.writeFileSync(file, JSON.stringify({ createdAt: stamp, payload }, null, 2));
+      return { vendorId: g.vendorId, vendorName: g.vendorName, billId: `MOCK-${key}`, docNumber: payload.DocNumber, payloadPath: file };
+    });
     let invoiceId = null;
     if (qb.createInvoice) {
       const invoicePayload = buildInvoicePayload(doc.extraction, { ...qb, customerId: qb.customerId || 'MOCK', invoiceItemId: qb.invoiceItemId || 'MOCK', serviceTicketFieldId: qb.serviceTicketFieldId || 'MOCK' });
-      fs.writeFileSync(path.join(dir, `${payload.DocNumber || doc.id}-invoice.json`),
-        JSON.stringify({ createdAt: new Date().toISOString(), payload: invoicePayload }, null, 2));
-      invoiceId = `MOCK-INV-${payload.DocNumber || doc.id}`;
+      fs.writeFileSync(path.join(dir, `${bills[0].docNumber || doc.id}-invoice.json`),
+        JSON.stringify({ createdAt: stamp, payload: invoicePayload }, null, 2));
+      invoiceId = `MOCK-INV-${bills[0].docNumber || doc.id}`;
     }
-    return { mock: true, billId: `MOCK-${(payload.DocNumber || doc.id)}`, docNumber: payload.DocNumber, payloadPath: file, invoiceId, invoiceDocNumber: invoiceId };
+    return { mock: true, bills, billErrors: [], billId: bills[0].billId, docNumber: bills[0].docNumber, payloadPath: bills[0].payloadPath, invoiceId, invoiceDocNumber: invoiceId };
   }
 
-  if (!doc.vendorId && !qb.vendorId) throw new Error('No vendor: pick one on the review screen, or connect to QuickBooks so the placeholder vendor resolves (Settings > QuickBooks)');
+  if (groups.some((g) => !g.vendorId)) throw new Error('No vendor: pick one on the review screen, or connect to QuickBooks so the placeholder vendor resolves (Settings > QuickBooks)');
   const accessToken = await getAccessToken(qb);
   const realmId = qb.tokens?.realmId;
   if (!realmId) throw new Error('Not connected to QuickBooks — run Connect first');
@@ -72,36 +76,54 @@ export async function pushToQuickBooks(doc, settings) {
     invoiceQb = { ...qb, ...refsPatch, itemMap: { ...qb.itemMap, ...refsPatch.itemMap } };
   }
 
-  const res = await fetch(`${apiBase(qb.mode)}/v3/company/${realmId}/bill?minorversion=75`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(payload),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const detail = body?.Fault?.Error?.[0];
-    const tid = res.headers.get('intuit_tid');
-    throw new Error(`QuickBooks error ${res.status}: ${detail?.Message || ''} ${detail?.Detail || ''}${tid ? ` [intuit_tid ${tid}]` : ''}`.trim());
-  }
-  const billId = body.Bill?.Id;
-
-  // Attach the original source document to the bill. The bill exists at this
-  // point, so an attachment failure must not fail the push — surface it instead.
-  let attachment = null;
-  let attachmentError = null;
-  if (billId && doc.filePath && fs.existsSync(doc.filePath)) {
+  // Bills created by an earlier partially-failed push are never recreated —
+  // re-pushing only fills in the suppliers whose bill failed last time.
+  const prior = doc.qb && !doc.qb.mock && Array.isArray(doc.qb.bills) ? doc.qb.bills : [];
+  const bills = [];
+  const billErrors = [];
+  for (const g of groups) {
+    const done = prior.find((b) => b.billId && b.vendorId === g.vendorId);
+    if (done) { bills.push(done); continue; }
+    const payload = buildBillPayload(doc.extraction, qb, g);
+    let body;
     try {
-      attachment = await uploadAttachment(qb.mode, accessToken, realmId, billId, doc.filePath, doc.fileName);
+      body = await qbPost(qb.mode, accessToken, realmId, 'bill', payload);
     } catch (err) {
-      attachmentError = err.message;
+      // Keep going: the remaining suppliers' bills should not be hostage to
+      // this one — the reviewer re-pushes and only the failed ones retry.
+      billErrors.push({ vendorId: g.vendorId, vendorName: g.vendorName, docNumber: payload.DocNumber, error: err.message });
+      continue;
     }
+    const billId = body.Bill?.Id;
+
+    // Attach the original source document to every bill it produced. The bill
+    // exists at this point, so an attachment failure must not fail the push —
+    // surface it instead.
+    let attachment = null;
+    let attachmentError = null;
+    if (billId && doc.filePath && fs.existsSync(doc.filePath)) {
+      try {
+        attachment = await uploadAttachment(qb.mode, accessToken, realmId, billId, doc.filePath, doc.fileName);
+      } catch (err) {
+        attachmentError = err.message;
+      }
+    }
+    bills.push({ vendorId: g.vendorId, vendorName: g.vendorName, billId, docNumber: payload.DocNumber, attachment, attachmentError });
   }
 
-  // Invoice to KAR (cost + margin). The bill exists at this point, so an
+  const first = bills[0] || {};
+  // The invoice waits until every supplier's bill exists — a half-billed order
+  // must not invoice KAR. The caller keeps the document re-pushable.
+  if (billErrors.length) {
+    return {
+      mock: false, bills, billErrors,
+      billId: first.billId || null, docNumber: first.docNumber || groups[0].docNumber,
+      attachment: first.attachment || null, attachmentError: first.attachmentError || null,
+      invoiceId: null, invoiceDocNumber: null, invoiceError: null,
+    };
+  }
+
+  // Invoice to KAR (cost + margin). The bills exist at this point, so an
   // invoice failure must not fail the push — surface it so the reviewer can
   // raise the invoice in QBO by hand.
   let invoiceId = null;
@@ -137,7 +159,12 @@ export async function pushToQuickBooks(doc, settings) {
     }
   }
 
-  return { mock: false, billId, docNumber: payload.DocNumber, attachment, attachmentError, invoiceId, invoiceDocNumber, invoiceError };
+  return {
+    mock: false, bills, billErrors: [],
+    billId: first.billId, docNumber: first.docNumber,
+    attachment: first.attachment || null, attachmentError: first.attachmentError || null,
+    invoiceId, invoiceDocNumber, invoiceError,
+  };
 }
 
 // ---------------- OAuth ----------------

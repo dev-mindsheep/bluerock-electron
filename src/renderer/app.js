@@ -198,6 +198,27 @@ async function extractNow(id) {
   if (state.view === 'review' && state.selectedId === id) renderReview(doc);
 }
 
+// QuickBooks result panel — handles both the legacy single-bill shape and the
+// multi-supplier shape (qb.bills / qb.billErrors): one line per bill, failed
+// bills in red, then the invoice.
+function qbInfoHtml(qb) {
+  const bills = qb.bills || (qb.billId ? [{ billId: qb.billId, docNumber: qb.docNumber, attachmentError: qb.attachmentError }] : []);
+  const parts = [];
+  parts.push(qb.pushedAt
+    ? `Pushed ${new Date(qb.pushedAt).toLocaleString()}${qb.mock ? ' — MOCK entry' : ''}`
+    : '<span style="color:var(--amber)">Partially pushed — some bills failed; push again to retry them</span>');
+  for (const b of bills) {
+    parts.push(`Bill ${b.docNumber ? 'no. ' + esc(b.docNumber) : ''}${b.billId ? `${b.docNumber ? ' · ' : ''}Id ${esc(b.billId)}` : ''}${b.vendorName ? ' · ' + esc(b.vendorName) : ''}${b.attachmentError ? ` · <span style="color:var(--red)">attachment failed: ${esc(b.attachmentError)}</span>` : ''}`);
+  }
+  for (const e of qb.billErrors || []) {
+    parts.push(`<span style="color:var(--red)">Bill ${e.docNumber ? 'no. ' + esc(e.docNumber) + ' ' : ''}${e.vendorName ? `(${esc(e.vendorName)}) ` : ''}failed: ${esc(e.error)}</span>`);
+  }
+  if (qb.invoiceId) parts.push(`Invoice ${qb.invoiceDocNumber ? 'no. ' + esc(qb.invoiceDocNumber) : 'Id ' + esc(qb.invoiceId)}`);
+  if (qb.invoiceError) parts.push(`<span style="color:var(--red)">invoice failed: ${esc(qb.invoiceError)}</span>`);
+  if (qb.payloadPath) parts.push('<a href="#" id="open-payload">view payload</a>');
+  return parts.join('<br>');
+}
+
 function fieldHtml(label, key, value, { warn = false, type = 'text' } = {}) {
   return `
     <div class="field ${warn ? 'warn' : ''}">
@@ -271,7 +292,7 @@ async function renderReview(docArg) {
 
         <div class="section-title">Line items (${items.length}) <button class="btn" id="btn-add-item" style="padding:2px 10px;font-size:11px;margin-left:8px">+ row</button></div>
         <table class="items">
-          <thead><tr><th style="width:26px">#</th><th>Description</th><th style="width:56px">Qty</th><th style="width:64px">UoM</th><th style="width:78px">Unit cost</th><th style="width:64px">Margin %</th><th style="width:104px">Sage code</th><th>Purpose</th><th style="width:26px"></th></tr></thead>
+          <thead><tr><th style="width:26px">#</th><th>Description</th><th style="width:56px">Qty</th><th style="width:64px">UoM</th><th style="width:78px">Unit cost</th><th style="width:64px">Margin %</th><th style="width:104px">Sage code</th><th>Purpose</th><th style="width:118px">Supplier</th><th style="width:26px"></th></tr></thead>
           <tbody id="items-body">
             ${items.map((li, i) => `
               <tr data-i="${i}">
@@ -283,6 +304,10 @@ async function renderReview(docArg) {
                 <td><input data-li="margin_pct" type="number" step="0.1" value="${esc(li.margin_pct ?? '')}" placeholder="${defMargin}" /></td>
                 <td><input data-li="sage_code" value="${esc(li.sage_code ?? '')}" class="${sageOk(li.sage_code) ? '' : 'warn'}" /></td>
                 <td><input data-li="purpose" value="${esc(li.purpose ?? '')}" /></td>
+                <td><select data-li="vendor_id" title="Lines with their own supplier become a separate bill to that supplier">
+                  <option value="">— default —</option>
+                  ${(state.qbVendors || []).map((v) => `<option value="${esc(v.id)}" ${li.vendor_id === v.id ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
+                </select></td>
                 <td><button class="btn danger" data-del="${i}" style="padding:2px 7px;font-size:11px">✕</button></td>
               </tr>`).join('')}
           </tbody>
@@ -294,16 +319,16 @@ async function renderReview(docArg) {
           ${(ex.approvals || []).map((a) => `✓ ${esc(a.name)} — ${esc(a.status)} ${esc(a.timestamp || '')}`).join('<br>') || '<span style="color:var(--muted)">None detected</span>'}
         </div>
 
-        <div class="section-title">Supplier (QuickBooks vendor)</div>
+        <div class="section-title">Default supplier (QuickBooks vendor)</div>
         <div class="field">
           <select id="vendor-select">
             <option value="">— placeholder vendor (UNKNOWN) —</option>
             ${(state.qbVendors || []).map((v) => `<option value="${esc(v.id)}" ${doc.vendorId === v.id ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
             ${state.qbVendors == null ? '<option disabled>Loading vendor list…</option>' : ''}
           </select>
-          <div class="hint">The market supplier this bill is payable to. Leave as placeholder if unknown — the team reassigns it in QuickBooks later.</div>
+          <div class="hint">The market supplier the bill is payable to. Leave as placeholder if unknown — the team reassigns it in QuickBooks later. An order with items from several suppliers becomes several bills: pick the other suppliers per line in the items table.</div>
         </div>
-        ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">Pushed ${new Date(doc.qb.pushedAt).toLocaleString()} — ${doc.qb.mock ? 'MOCK entry' : `Bill ${doc.qb.docNumber ? 'no. ' + esc(doc.qb.docNumber) + ' · Id ' + esc(doc.qb.billId) : 'Id ' + esc(doc.qb.billId)}`}${doc.qb.invoiceId ? ` · Invoice ${doc.qb.invoiceDocNumber ? 'no. ' + esc(doc.qb.invoiceDocNumber) : 'Id ' + esc(doc.qb.invoiceId)}` : ''}${doc.qb.invoiceError ? ` · <span style="color:var(--red)">invoice failed: ${esc(doc.qb.invoiceError)}</span>` : ''} ${doc.qb.payloadPath ? `· <a href="#" id="open-payload">view payload</a>` : ''}</div>` : ''}
+        ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">${qbInfoHtml(doc.qb)}</div>` : ''}
         ${doc.driveFile ? `<div class="approvals" style="margin-top:6px">Archived to Drive: ${esc(doc.driveFile.path)}</div>` : ''}
       </div>
     </div>
@@ -343,10 +368,13 @@ async function renderReview(docArg) {
     $$('.review-right [data-key]').forEach((el) => { out[el.dataset.key] = el.value === '' ? null : el.value; });
     out.line_items = $$('#items-body tr').map((tr, i) => {
       const li = {};
-      $$('input[data-li]', tr).forEach((el) => {
+      $$('input[data-li], select[data-li]', tr).forEach((el) => {
         li[el.dataset.li] = ['qty', 'unit_cost', 'margin_pct'].includes(el.dataset.li)
           ? (el.value === '' ? null : Number(el.value))
           : (el.value === '' ? null : el.value);
+        if (el.dataset.li === 'vendor_id') {
+          li.vendor_name = el.value ? el.selectedOptions[0]?.textContent || null : null;
+        }
       });
       li.no = i + 1;
       return li;
@@ -405,10 +433,20 @@ async function renderReview(docArg) {
     try {
       await save();
       const updated = await window.api.qb.push(doc.id);
-      pushStatus(updated.qb.mock
-        ? `MOCK: Bill payload written (${updated.qb.billId})${updated.qb.invoiceId ? ' + invoice payload' : ''}`
-        : `Pushed to QuickBooks — Bill ${updated.qb.docNumber ? `no. ${updated.qb.docNumber} (Id ${updated.qb.billId})` : `Id ${updated.qb.billId}`}${updated.qb.invoiceId ? ` · Invoice no. ${updated.qb.invoiceDocNumber || updated.qb.invoiceId}` : ''}${updated.qb.invoiceError ? ` (invoice failed: ${updated.qb.invoiceError})` : ''}${updated.qb.attachmentError ? ` (attachment failed: ${updated.qb.attachmentError})` : ''}`,
-        updated.qb.invoiceError ? 'error' : 'info');
+      const q = updated.qb;
+      const nBills = (q.bills || []).length;
+      const nFail = (q.billErrors || []).length;
+      if (q.mock) {
+        pushStatus(`MOCK: ${nBills > 1 ? `${nBills} bill payloads` : 'Bill payload'} written${q.invoiceId ? ' + invoice payload' : ''}`);
+      } else if (nFail) {
+        pushStatus(`Push incomplete: ${nBills} bill(s) created, ${nFail} failed — push again to retry the failed ones`, 'error');
+      } else {
+        const billTxt = nBills > 1
+          ? `${nBills} bills (${q.bills.map((b) => b.docNumber || b.billId).join(', ')})`
+          : `Bill ${q.docNumber ? `no. ${q.docNumber} (Id ${q.billId})` : `Id ${q.billId}`}`;
+        pushStatus(`Pushed to QuickBooks — ${billTxt}${q.invoiceId ? ` · Invoice no. ${q.invoiceDocNumber || q.invoiceId}` : ''}${q.invoiceError ? ` (invoice failed: ${q.invoiceError})` : ''}${q.attachmentError ? ` (attachment failed: ${q.attachmentError})` : ''}`,
+          q.invoiceError ? 'error' : 'info');
+      }
       state.busy = false;
       renderReview(updated);
     } catch (err) {
