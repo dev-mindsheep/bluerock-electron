@@ -1,7 +1,7 @@
 {
   "name": "bluerock-procurement",
   "productName": "Blue Rock Procurement",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "Blue Rock Trading — KAR procurement document intake, extraction, review and QuickBooks entry",
   "author": "Mindsheep Marketing <david@mindsheep.com.au>",
   "license": "UNLICENSED",

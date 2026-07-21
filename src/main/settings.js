@@ -116,6 +116,15 @@ export const DEFAULTS = {
     clientSecret: '',
     redirectPort: 8124,
     rootFolderName: 'KAR',
+    // Blue Rock's master tracking sheet (one row per Service Ticket). When
+    // enabled, the review screen can reserve the next ST number in the sheet,
+    // and each pushed order completes its row (status, QB invoice number,
+    // bill register). Uses the Drive connection's Google account — the sheet
+    // must be owned by or shared (edit) with it, and the Google Sheets API
+    // must be enabled in the same GCP project as the Drive client.
+    trackingEnabled: false,
+    trackingSheetUrl: '',
+    trackingSheetTab: 'Operation',
     tokens: null,
   },
 };

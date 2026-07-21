@@ -10,6 +10,7 @@ import { checkEmail } from './email.js';
 import { runExtraction } from './extract/index.js';
 import { pushToQuickBooks, startConnect, finishConnectManual, qbStatus, fetchVendors } from './quickbooks.js';
 import { startDriveConnect, archiveToDrive, driveStatus } from './drive.js';
+import { allocateTicket, recordPushInTracking, trackingMeta } from './sheets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -197,13 +198,45 @@ handle('qb:push', async (id) => {
       notifyStatus(`Drive archive failed (entry was still pushed): ${err.message}`, 'error');
     }
   }
+  // Complete the order's row in the Blue Rock tracking sheet (status, QB
+  // invoice number, bill register). Non-fatal like Drive archival — the push
+  // stands, and the review screen offers a retry.
+  let sheetSync = doc.sheetSync || null;
+  if (complete && settings.drive.trackingEnabled) {
+    try {
+      sheetSync = { ok: true, at: new Date().toISOString(), ...(await recordPushInTracking({ ...doc, qb: result })) };
+    } catch (err) {
+      sheetSync = { ok: false, at: new Date().toISOString(), error: err.message };
+      notifyStatus(`Tracking sheet update failed (entry was still pushed): ${err.message}`, 'error');
+    }
+  }
   const updated = store.updateDocument(id, {
     status: complete ? 'pushed' : 'extracted',
     error: complete ? null
       : `${result.billErrors.length} of ${result.bills.length + result.billErrors.length} bills failed — open the document and push again to retry the failed ones`,
     qb: { ...result, pushedAt: complete ? new Date().toISOString() : doc.qb?.pushedAt || null },
     driveFile,
+    sheetSync,
   });
+  notifyDocsChanged();
+  return updated;
+});
+
+// ---- Blue Rock tracking sheet ----
+handle('sheet:meta', () => trackingMeta());
+handle('sheet:allocate', async (id) => {
+  const doc = store.getDocument(id);
+  if (!doc) throw new Error('Document not found');
+  const { ticket } = await allocateTicket(doc);
+  const updated = store.updateDocument(id, { extraction: { ...(doc.extraction || {}), service_ticket: ticket } });
+  notifyDocsChanged();
+  return updated;
+});
+handle('sheet:sync', async (id) => {
+  const doc = store.getDocument(id);
+  if (!doc?.qb) throw new Error('Document has not been pushed yet');
+  const res = await recordPushInTracking(doc);
+  const updated = store.updateDocument(id, { sheetSync: { ok: true, at: new Date().toISOString(), ...res } });
   notifyDocsChanged();
   return updated;
 });

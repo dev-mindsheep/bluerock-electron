@@ -232,6 +232,7 @@ async function renderReview(docArg) {
   if (!doc) { state.view = 'queue'; return render(); }
   const cfg = state.settings = await window.api.settings.get();
   const invoicing = !!cfg.qb.createInvoice;
+  const tracking = !!cfg.drive?.trackingEnabled;
   const defMargin = Number(cfg.qb.defaultMarginPct) || 0;
   const extracting = doc.status === 'extracting' || state.extractingId === doc.id;
   const ex = doc.extraction || {};
@@ -283,8 +284,31 @@ async function renderReview(docArg) {
           </div>
           ${fieldHtml('Priority', 'priority', ex.priority, { warn: low.has('priority') })}
           ${fieldHtml('Purchase type', 'purchase_type', ex.purchase_type, { warn: low.has('purchase_type') })}
-          ${invoicing ? fieldHtml('Service ticket (goes on the KAR invoice)', 'service_ticket', ex.service_ticket) : ''}
+          ${invoicing || tracking ? `
+          <div class="field">
+            <label>Service ticket${invoicing ? ' (goes on the KAR invoice)' : ''}</label>
+            <div style="display:flex;gap:6px">
+              <input data-key="service_ticket" value="${esc(ex.service_ticket ?? '')}" style="flex:1;min-width:0" />
+              ${tracking ? `<button class="btn" id="btn-alloc-st" ${doc.status === 'pushed' || state.busy ? 'disabled' : ''} title="Reserve the next number in the Blue Rock tracking sheet">Next ST</button>` : ''}
+            </div>
+          </div>` : ''}
+          ${tracking ? `
+          <div class="field">
+            <label>Category (tracking sheet)</label>
+            <input data-key="tracking_category" list="dl-sheet-cat" value="${esc(ex.tracking_category ?? '')}" placeholder="e.g. ${esc(state.sheetMeta?.categories?.[0] || 'Grocery')}" />
+          </div>
+          <div class="field">
+            <label>Status (tracking sheet)</label>
+            <input data-key="tracking_status" list="dl-sheet-status" value="${esc(ex.tracking_status ?? '')}" placeholder="e.g. ${esc(state.sheetMeta?.statuses?.[0] || 'Sent')}" />
+          </div>
+          <div class="field">
+            <label>Bill register (tracking sheet)</label>
+            <input data-key="bill_register" value="${esc(ex.bill_register ?? 'R')}" />
+          </div>
+          <datalist id="dl-sheet-cat">${(state.sheetMeta?.categories || []).map((v) => `<option value="${esc(v)}"></option>`).join('')}</datalist>
+          <datalist id="dl-sheet-status">${(state.sheetMeta?.statuses || []).map((v) => `<option value="${esc(v)}"></option>`).join('')}</datalist>` : ''}
         </div>
+        ${tracking && state.sheetMeta && !state.sheetMeta.error ? `<div class="meta-line" style="margin-top:6px">Tracking sheet: ${state.sheetMeta.rows} rows · next free ticket ${esc(state.sheetMeta.nextTicket)}</div>` : ''}
         <div class="field ${low.has('note') ? 'warn' : ''}" style="margin-top:10px">
           <label>Note</label>
           <textarea data-key="note" rows="2">${esc(ex.note ?? '')}</textarea>
@@ -330,6 +354,9 @@ async function renderReview(docArg) {
         </div>
         ${doc.qb ? `<div class="section-title">QuickBooks</div><div class="approvals">${qbInfoHtml(doc.qb)}</div>` : ''}
         ${doc.driveFile ? `<div class="approvals" style="margin-top:6px">Archived to Drive: ${esc(doc.driveFile.path)}</div>` : ''}
+        ${doc.sheetSync ? (doc.sheetSync.ok
+          ? `<div class="approvals" style="margin-top:6px">Tracking sheet: ${doc.sheetSync.skipped ? `not updated — ${esc(doc.sheetSync.skipped)}` : `row ${doc.sheetSync.added ? 'added' : 'updated'}${doc.sheetSync.row ? ` (row ${doc.sheetSync.row})` : ''}`}</div>`
+          : `<div class="approvals" style="margin-top:6px"><span style="color:var(--red)">Tracking sheet update failed: ${esc(doc.sheetSync.error)}</span> <button class="btn" id="btn-sheet-retry" style="padding:2px 10px;font-size:11px">Retry</button></div>`) : ''}
       </div>
     </div>
     <div class="review-actions">
@@ -361,6 +388,40 @@ async function renderReview(docArg) {
         if (state.view === 'review' && state.selectedId === doc.id) renderReview(doc);
       });
   }
+  // Tracking-sheet facts (Category/Status suggestions + next free ticket) load
+  // once per session, lazily, from the sheet itself.
+  if (tracking && state.sheetMeta == null && !state.sheetMetaLoading) {
+    state.sheetMetaLoading = true;
+    window.api.sheet.meta()
+      .then((m) => { state.sheetMeta = m; })
+      .catch((err) => {
+        state.sheetMeta = { error: err.message };
+        pushStatus(`Tracking sheet: ${err.message}`, 'error');
+      })
+      .finally(() => {
+        state.sheetMetaLoading = false;
+        if (state.view === 'review' && state.selectedId === doc.id) renderReview();
+      });
+  }
+
+  $('#btn-alloc-st')?.addEventListener('click', (e) => withSpinner(e.currentTarget, 'Reserving…', async () => {
+    try {
+      await save(); // the reservation row carries what's currently typed (category, site, order no., date)
+      const updated = await window.api.sheet.allocate(doc.id);
+      state.sheetMeta = null; // next-ticket display is stale now
+      pushStatus(`Service ticket ${updated.extraction.service_ticket} reserved in the tracking sheet`);
+      renderReview(updated);
+    } catch (err) { pushStatus(`Could not reserve a Service ticket: ${err.message}`, 'error'); }
+  }));
+
+  $('#btn-sheet-retry')?.addEventListener('click', (e) => withSpinner(e.currentTarget, 'Updating…', async () => {
+    try {
+      const updated = await window.api.sheet.sync(doc.id);
+      pushStatus('Tracking sheet updated');
+      renderReview(updated);
+    } catch (err) { pushStatus(`Tracking sheet update failed: ${err.message}`, 'error'); }
+  }));
+
   $('#open-payload')?.addEventListener('click', (e) => { e.preventDefault(); window.api.app.openPath(doc.qb.payloadPath); });
 
   const collect = () => {
@@ -592,6 +653,16 @@ async function renderSettings() {
           ${sInput('Root folder name', 'drive.rootFolderName', s.drive.rootFolderName)}
           ${sInput('OAuth redirect port', 'drive.redirectPort', s.drive.redirectPort, { type: 'number' })}
         </div>
+        <div class="section-title">Blue Rock tracking sheet</div>
+        <div class="hint">Optional. The review screen's "Next ST" button reserves the next Service Ticket number as a new row in the master tracking sheet, and each pushed order completes its row (Category, KAR Location, Status, Client Order #, Receiving Date, QB Invoice Number, Bill REGISTER). Needs: the Google Sheets API enabled in the same Google Cloud project as the Drive client, the sheet owned by (or shared with edit rights with) the connected Google account, and — for connections made before this feature — one reconnect below to grant the spreadsheet permission.</div>
+        ${s.drive.trackingEnabled && drSt.connected && !drSt.sheetsReady ? '<div class="hint" style="color:var(--amber)">This Google connection predates the tracking-sheet feature — click "Connect to Google Drive…" once to grant the spreadsheet permission.</div>' : ''}
+        <div class="inline" style="margin-bottom:10px">
+          <label><input type="checkbox" data-s="drive.trackingEnabled" ${s.drive.trackingEnabled ? 'checked' : ''}/> Update the tracking sheet</label>
+        </div>
+        <div class="grid2">
+          ${sInput('Tracking sheet URL', 'drive.trackingSheetUrl', s.drive.trackingSheetUrl, { placeholder: 'https://docs.google.com/spreadsheets/d/…' })}
+          ${sInput('Tab name', 'drive.trackingSheetTab', s.drive.trackingSheetTab, { placeholder: 'Operation' })}
+        </div>
         <button class="btn" id="btn-drive-connect">Connect to Google Drive…</button>
       </div>
       <div class="settings-card">
@@ -633,6 +704,7 @@ async function renderSettings() {
   $('#btn-save-settings').onclick = (e) => withSpinner(e.currentTarget, 'Saving…', async () => {
     try {
       await saveForm();
+      state.sheetMeta = null; // tracking-sheet URL/tab may have changed
       pushStatus('Settings saved');
       renderSettings();
     } catch (err) { pushStatus(`Save failed: ${err.message}`, 'error'); }
@@ -662,6 +734,7 @@ async function renderSettings() {
     try {
       await saveForm();
       await window.api.drive.connect();
+      state.sheetMeta = null; // a fresh connection may change what's reachable
       pushStatus('Google Drive connected');
     } catch (err) { pushStatus(`Drive connect failed: ${err.message}`, 'error'); }
     renderSettings();

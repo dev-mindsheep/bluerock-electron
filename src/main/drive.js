@@ -1,15 +1,17 @@
 // Optional Google Drive archival (off by default — the app is fully functional without it).
-// Uses the OAuth "Desktop app" loopback flow with the non-sensitive drive.file scope
-// (the app can only see files/folders it created). NOTE for setup: the Google Cloud
-// OAuth consent screen must be "In production" — in "Testing" status refresh tokens
-// expire after 7 days and archival silently stops.
+// Uses the OAuth "Desktop app" loopback flow with the drive.file scope (the app can only
+// see files/folders it created) plus the spreadsheets scope for the tracking-sheet
+// integration (sheets.js) — fine without Google verification because Blue Rock's consent
+// screen is Internal to their Workspace. NOTE for setup: the Google Cloud OAuth consent
+// screen must be "In production" — in "Testing" status refresh tokens expire after
+// 7 days and archival silently stops. (Doesn't apply to Internal consent screens.)
 import { shell } from 'electron';
 import http from 'node:http';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { getSettings, saveSettings } from './settings.js';
 
-const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
@@ -62,6 +64,10 @@ export async function startDriveConnect() {
               access_token: json.access_token,
               refresh_token: json.refresh_token,
               expires_at: Date.now() + (json.expires_in || 3600) * 1000,
+              // What was actually granted — connections made before the
+              // tracking-sheet feature lack the spreadsheets scope and need a
+              // one-time reconnect (surfaced in Settings via driveStatus).
+              scope: json.scope || SCOPE,
             },
           },
         });
@@ -79,6 +85,11 @@ export async function startDriveConnect() {
     server.listen(port, '127.0.0.1', () => shell.openExternal(authUrl));
     setTimeout(() => { try { server.close(); } catch {} reject(new Error('OAuth timed out after 5 minutes')); }, 5 * 60_000).unref();
   });
+}
+
+/** Bearer token for Google APIs (Drive + Sheets share the one connection). */
+export async function driveAccessToken() {
+  return accessToken();
 }
 
 async function accessToken() {
@@ -194,5 +205,11 @@ export async function archiveToDrive(doc, settings) {
 
 export function driveStatus() {
   const drive = getSettings().drive;
-  return { enabled: !!drive.enabled, connected: !!drive.tokens?.refresh_token };
+  return {
+    enabled: !!drive.enabled,
+    connected: !!drive.tokens?.refresh_token,
+    // False for connections made before the tracking-sheet feature (their
+    // token predates the spreadsheets scope) — Settings prompts a reconnect.
+    sheetsReady: !!(drive.tokens?.scope || '').includes('/spreadsheets'),
+  };
 }

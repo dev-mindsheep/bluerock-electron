@@ -36,6 +36,11 @@ contextBridge.exposeInMainWorld('api', {
     connect: () => invoke('drive:connect'),
     status: () => invoke('drive:status'),
   },
+  sheet: {
+    meta: () => invoke('sheet:meta'),
+    allocate: (id) => invoke('sheet:allocate', id),
+    sync: (id) => invoke('sheet:sync', id),
+  },
   app: {
     openPath: (p) => invoke('app:open-path', p),
     versions: () => invoke('app:versions'),
