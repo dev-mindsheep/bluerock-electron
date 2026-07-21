@@ -66,6 +66,9 @@ async function sheetsFetch(url, opts = {}) {
     if (res.status === 404) {
       throw new Error('Tracking sheet not found — check the sheet URL in Settings > Google Drive');
     }
+    if (/must not be an Office file/i.test(text)) {
+      throw new Error('The tracking sheet is an Excel (.xlsx) file — the Sheets API only works with native Google Sheets. Open it in Drive, use File > Save as Google Sheets, then paste the NEW sheet’s URL into Settings > Google Drive');
+    }
     throw new Error(`Sheets API ${res.status}: ${text}`);
   }
   return res.json();
