@@ -15,7 +15,16 @@ const SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
+// The loopback listener from an abandoned connect attempt (browser closed,
+// consent cancelled) would otherwise hold the port for the full 5-minute
+// timeout and make an immediate retry fail with EADDRINUSE.
+let pendingOauthServer = null;
+
 export async function startDriveConnect() {
+  if (pendingOauthServer) {
+    try { pendingOauthServer.close(); } catch { /* already closed */ }
+    pendingOauthServer = null;
+  }
   const drive = getSettings().drive;
   // Defensive trim — older saved settings may carry pasted whitespace.
   drive.clientId = (drive.clientId || '').trim();
@@ -74,16 +83,19 @@ export async function startDriveConnect() {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<h2>Connected to Google Drive.</h2>You can close this tab.');
         server.close();
+        pendingOauthServer = null;
         resolve({ connected: true });
       } catch (err) {
         res.writeHead(500).end('OAuth error: ' + err.message);
         server.close();
+        pendingOauthServer = null;
         reject(err);
       }
     });
     server.on('error', reject);
     server.listen(port, '127.0.0.1', () => shell.openExternal(authUrl));
-    setTimeout(() => { try { server.close(); } catch {} reject(new Error('OAuth timed out after 5 minutes')); }, 5 * 60_000).unref();
+    pendingOauthServer = server;
+    setTimeout(() => { try { server.close(); } catch {} if (pendingOauthServer === server) pendingOauthServer = null; reject(new Error('OAuth timed out after 5 minutes')); }, 5 * 60_000).unref();
   });
 }
 
